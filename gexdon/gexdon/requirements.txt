@@ -1,0 +1,8 @@
+streamlit
+requests>=2.31.0
+pandas
+matplotlib
+numpy
+pytz
+scipy
+git+https://github.com/rongardF/tvdatafeed.git
