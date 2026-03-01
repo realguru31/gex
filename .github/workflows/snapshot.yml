@@ -1,0 +1,48 @@
+name: GEXdon Snapshot Worker
+
+on:
+  schedule:
+    # Every 30 min during RTH: 14:00-20:30 UTC = 9:00-15:30 ET (covers A through M periods)
+    # GitHub cron is UTC. Market profile periods:
+    # A=09:30 (14:30 UTC), B=10:00 (15:00), ..., M=15:30 (20:30), N=16:00 (21:00)
+    # We start at 14:00 to ensure 09:30 ET bucket is captured
+    - cron: '0,30 14,15,16,17,18,19,20 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger for testing
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    # Skip on US market holidays (best-effort: skip if market closed)
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -q requests pandas numpy scipy pytz plotly
+
+      - name: Run snapshot worker
+        working-directory: gexdonindex
+        run: python snapshot_worker.py
+
+      - name: Commit and push snapshots
+        run: |
+          cd gexdonindex
+          git config user.name "GEXdon Bot"
+          git config user.email "gexdon-bot@users.noreply.github.com"
+          git add data/snapshots/
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "No new snapshots to commit"
+          else
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "📸 Snapshot: ${TIMESTAMP}"
+            git push
+          fi
