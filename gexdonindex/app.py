@@ -468,6 +468,7 @@ def init_state():
         "last_auto_refresh": 0,
         "live_snapshot": None,
         "viewing_mode": "live",
+        "view_date": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -534,11 +535,45 @@ with st.sidebar:
     # Snapshots info
     st.markdown("---")
     st.markdown("### 📁 Snapshots")
-    snaps_hhmm = list_snapshots(st.session_state.ticker)
-    if snaps_hhmm:
-        st.markdown(f"{len(snaps_hhmm)} snapshots today")
+
+    # List available dates for this ticker
+    ticker_snap_dir = os.path.join(APP_DIR, SNAPSHOT_DIR, st.session_state.ticker)
+    available_dates = []
+    if os.path.exists(ticker_snap_dir):
+        available_dates = sorted([
+            d for d in os.listdir(ticker_snap_dir)
+            if os.path.isdir(os.path.join(ticker_snap_dir, d))
+            and any(f.endswith(".pkl") for f in os.listdir(os.path.join(ticker_snap_dir, d)))
+        ], reverse=True)
+
+    today_str = now_et().strftime("%Y-%m-%d")
+
+    if available_dates:
+        # Date selector — show today first, then historical
+        date_options = available_dates
+        if today_str not in date_options:
+            date_options = [today_str] + date_options
+        selected_date = st.selectbox(
+            "📅 Date",
+            date_options,
+            index=0,
+            key="snapshot_date",
+            format_func=lambda d: f"{d} (today)" if d == today_str else d,
+        )
+        st.session_state.view_date = selected_date
+
+        snaps_hhmm = list_snapshots(st.session_state.ticker, selected_date)
+        if snaps_hhmm:
+            st.markdown(f"{len(snaps_hhmm)} snapshots on {selected_date}")
+        else:
+            st.markdown(f"No snapshots on {selected_date}")
     else:
-        st.markdown("No snapshots today")
+        st.session_state.view_date = today_str
+        snaps_hhmm = list_snapshots(st.session_state.ticker)
+        if snaps_hhmm:
+            st.markdown(f"{len(snaps_hhmm)} snapshots today")
+        else:
+            st.markdown("No snapshots yet")
 
     # Delete all snapshots button
     if st.button("🗑️ Delete All Snapshots", use_container_width=True):
@@ -614,27 +649,35 @@ if snap is not None:
         st.caption(f"📅 Chains: {exp_display}")
 
     # Time slider with Market Profile period labels (A, B, C...)
-    snaps_hhmm = list_snapshots(st.session_state.ticker)
+    view_date = getattr(st.session_state, 'view_date', None) or now_et().strftime("%Y-%m-%d")
+    snaps_hhmm = list_snapshots(st.session_state.ticker, view_date)
     if snaps_hhmm:
         st.markdown("---")
-        period_options = ["LIVE"] + [hhmm_to_period_label(h) for h in snaps_hhmm]
+        is_today = (view_date == now_et().strftime("%Y-%m-%d"))
+        period_options = (["LIVE"] if is_today else []) + [hhmm_to_period_label(h) for h in snaps_hhmm]
+        default_value = "LIVE" if is_today else period_options[-1] if period_options else "LIVE"
+
         selected = st.select_slider(
             "⏱ Period",
             options=period_options,
-            value="LIVE",
+            value=default_value,
             key="time_slider",
         )
 
         if selected != "LIVE":
             # Parse back: "A (09:30)" → "0930"
-            idx = period_options.index(selected) - 1  # -1 for LIVE offset
+            if is_today:
+                idx = period_options.index(selected) - 1  # -1 for LIVE offset
+            else:
+                idx = period_options.index(selected)
             hhmm = snaps_hhmm[idx]
             h, m = int(hhmm[:2]), int(hhmm[2:])
             target_dt = datetime.combine(datetime.today(), dtime(h, m))
-            hist_snap = load_snapshot(st.session_state.ticker, target_dt)
+            hist_snap = load_snapshot(st.session_state.ticker, target_dt, date_str=view_date)
             if hist_snap:
                 snap = hist_snap
-                st.info(f"📷 Viewing snapshot: {selected}")
+                date_label = f" ({view_date})" if not is_today else ""
+                st.info(f"📷 Viewing snapshot: {selected}{date_label}")
 
     # Two-column layout
     st.markdown("---")
