@@ -516,4 +516,5 @@ def build_diagnostic_table(data, percent_range=0.03):
             "Net_Charm": round(c_charm + p_charm, 1),
             "Expiries": c_count,
         })
-e()
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
