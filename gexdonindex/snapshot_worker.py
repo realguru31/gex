@@ -100,6 +100,16 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
     diag_table = build_diagnostic_table(data, percent_range)
     diag_info = data.get("diagnostics", {})
 
+    # Ensure DataFrames use plain dtypes for pickle compatibility
+    # (GitHub Actions pandas may use StringDtype which Streamlit Cloud pandas can't unpickle)
+    def _normalize_df(df):
+        if df is None:
+            return df
+        for col in df.columns:
+            if hasattr(df[col], 'dtype') and str(df[col].dtype) == 'string':
+                df[col] = df[col].astype(object)
+        return df
+
     snapshot = {
         "timestamp": now_et().isoformat(),
         "ticker": ticker,
@@ -114,9 +124,9 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
         "fetched_expiries": data.get("fetched_expiries", []),
         "fig1": fig1, "fig2": fig2, "fig3": fig3,
         "levels": all_levels,
-        "calls": data["calls"],
-        "puts": data["puts"],
-        "diag_table": diag_table,
+        "calls": _normalize_df(data["calls"].copy()),
+        "puts": _normalize_df(data["puts"].copy()),
+        "diag_table": _normalize_df(diag_table.copy() if diag_table is not None else None),
         "diag_info": diag_info,
     }
 
