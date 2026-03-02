@@ -798,7 +798,7 @@ if snap is not None:
                     "BC_Gamma_C": "{:,.0f}", "BC_Gamma_P": "{:,.0f}",
                     "C_Charm": "{:,.0f}", "P_Charm": "{:,.0f}", "Net_Charm": "{:,.0f}",
                 }),
-                use_container_width=True,
+                width="stretch",
                 height=400,
             )
             st.caption(
@@ -815,14 +815,14 @@ if snap is not None:
         st.markdown("**Raw Call Chain (first 20 rows)**")
         raw_calls = snap.get("calls")
         if raw_calls is not None and not raw_calls.empty:
-            st.dataframe(raw_calls.head(20), use_container_width=True, height=300)
+            st.dataframe(raw_calls.head(20), width="stretch", height=300)
         else:
             st.info("No call data")
 
         st.markdown("**Raw Put Chain (first 20 rows)**")
         raw_puts = snap.get("puts")
         if raw_puts is not None and not raw_puts.empty:
-            st.dataframe(raw_puts.head(20), use_container_width=True, height=300)
+            st.dataframe(raw_puts.head(20), width="stretch", height=300)
         else:
             st.info("No put data")
 
