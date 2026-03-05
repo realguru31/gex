@@ -119,7 +119,12 @@ def _snap_from_json(raw):
     out = {}
     for k, v in raw.items():
         if isinstance(v, dict) and v.get("__df__"):
-            out[k] = pd.DataFrame(v["data"])
+            df = pd.DataFrame(v["data"])
+            # Restore datetime index for price_data
+            if k == "price_data" and "datetime" in df.columns:
+                df["datetime"] = pd.to_datetime(df["datetime"])
+                df = df.set_index("datetime")
+            out[k] = df
         elif isinstance(v, dict) and v.get("__plotly__"):
             out[k] = go.Figure(v["data"])
         else:
@@ -196,6 +201,9 @@ def compute_gex_snapshot(ticker, percent_range, max_dte):
     diag_table = build_diagnostic_table(data, percent_range)
     diag_info = data.get("diagnostics", {})
 
+    # Fetch price data for snapshot storage
+    price_df = fetch_price_data(ticker, n_bars=200)
+
     return {
         "timestamp": now_et().isoformat(),
         "ticker": ticker,
@@ -213,6 +221,8 @@ def compute_gex_snapshot(ticker, percent_range, max_dte):
         # Store OI data for positions chart
         "calls": data["calls"],
         "puts": data["puts"],
+        # Store price data for historical candlestick chart
+        "price_data": price_df if price_df is not None and not price_df.empty else None,
         # Diagnostics
         "diag_table": diag_table,
         "diag_info": diag_info,
@@ -222,9 +232,13 @@ def compute_gex_snapshot(ticker, percent_range, max_dte):
 # ─────────────────────────────────────
 # Candlestick Price Chart (Plotly)
 # ─────────────────────────────────────
-def create_price_chart(ticker, gex_levels=None, spot=None):
-    """Plotly candlestick: dodgerblue up, magenta down. RTH only (9:30-16:00 ET)."""
-    price_df = fetch_price_data(ticker, n_bars=200)
+def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None):
+    """Plotly candlestick: dodgerblue up, magenta down. RTH only (9:30-16:00 ET).
+    If stored_price_df is provided (from snapshot), use it instead of fetching live."""
+    if stored_price_df is not None and not stored_price_df.empty:
+        price_df = stored_price_df
+    else:
+        price_df = fetch_price_data(ticker, n_bars=200)
 
     fig = go.Figure()
 
@@ -729,11 +743,13 @@ if snap is not None:
     col_price, col_gex = st.columns([0.32, 0.68])
 
     with col_price:
-        # Candlestick price chart
+        # Candlestick price chart — use stored data from snapshot if available
+        stored_price = snap.get("price_data")
         price_fig = create_price_chart(
             st.session_state.ticker,
             gex_levels=snap.get("levels"),
             spot=snap["spot"],
+            stored_price_df=stored_price if isinstance(stored_price, pd.DataFrame) else None,
         )
         st.plotly_chart(price_fig, width="stretch", theme=None, key="price_chart")
 
