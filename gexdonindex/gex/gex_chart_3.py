@@ -97,7 +97,7 @@ def generate_pressure_chart(data, percent_range=0.03):
         if crosses:
             levels["pressure_eq"] = float(min(crosses, key=lambda x: abs(x - spot)))
 
-    title = f"Charm Pressure & Acceleration ({exp_lbl}) [{source.upper()}]"
+    title = f"Charm Pressure & Acceleration ({exp_lbl})"
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
