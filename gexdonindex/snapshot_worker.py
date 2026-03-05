@@ -22,7 +22,7 @@ from config import (
     TICKERS, SNAPSHOT_DIR, PERIOD_LABELS,
     STRIKE_RANGES, DTE_OPTIONS,
 )
-from gex.gex_utils import fetch_options_data, build_diagnostic_table
+from gex.gex_utils import fetch_options_data, fetch_price_data, build_diagnostic_table
 from gex.gex_chart_1 import generate_gex_chart
 from gex.gex_chart_2 import generate_charm_chart
 from gex.gex_chart_3 import generate_pressure_chart
@@ -87,6 +87,9 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
 
     spot = data["spot"]
 
+    # Fetch price data (5-min candles for candlestick chart)
+    price_df = fetch_price_data(ticker, n_bars=200)
+
     # Generate charts (these return Plotly Figure objects)
     fig1, levels1 = generate_gex_chart(data, percent_range)
     fig2, levels2 = generate_charm_chart(data, percent_range)
@@ -106,7 +109,11 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
         """Convert DataFrame to JSON-safe dict."""
         if df is None:
             return None
-        return {"__df__": True, "data": df.to_dict(orient="list")}
+        # Convert index to a column if it has datetime info
+        d = df.copy()
+        if not isinstance(d.index, pd.RangeIndex):
+            d = d.reset_index()
+        return {"__df__": True, "data": d.to_dict(orient="list")}
 
     def _fig_to_dict(fig):
         """Convert Plotly Figure to JSON-safe dict."""
@@ -143,6 +150,7 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
                    for k, v in all_levels.items() if v is not None and not isinstance(v, list)},
         "calls": _df_to_dict(data["calls"]),
         "puts": _df_to_dict(data["puts"]),
+        "price_data": _df_to_dict(price_df) if price_df is not None and not price_df.empty else None,
         "diag_table": _df_to_dict(diag_table),
         "diag_info": diag_info,
     }
