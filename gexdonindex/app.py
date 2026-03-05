@@ -236,7 +236,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
     """Plotly candlestick: dodgerblue up, magenta down. RTH only (9:30-16:00 ET).
     If stored_price_df is provided (from snapshot), use it instead of fetching live."""
     if stored_price_df is not None and not stored_price_df.empty:
-        price_df = stored_price_df
+        price_df = stored_price_df.copy()
     else:
         price_df = fetch_price_data(ticker, n_bars=200)
 
@@ -250,16 +250,37 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
                           height=600, margin=dict(l=20, r=20, t=30, b=20))
         return fig
 
+    # Ensure we have a DatetimeIndex (JSON snapshots may have datetime as column)
+    if not isinstance(price_df.index, pd.DatetimeIndex):
+        for col_name in ["datetime", "date", "time", "index"]:
+            if col_name in price_df.columns:
+                price_df[col_name] = pd.to_datetime(price_df[col_name])
+                price_df = price_df.set_index(col_name)
+                break
+
+    # Rename columns if needed (JSON may lose capitalization)
+    col_map = {c.lower(): c for c in ["Open", "High", "Low", "Close", "Volume"]}
+    price_df = price_df.rename(columns={k: v for k, v in col_map.items() if k in price_df.columns and v not in price_df.columns})
+
     # Convert index to ET timezone
-    if price_df.index.tz is None:
+    if isinstance(price_df.index, pd.DatetimeIndex):
+        if price_df.index.tz is None:
+            try:
+                price_df.index = price_df.index.tz_localize("UTC")
+            except Exception:
+                pass
         try:
-            price_df.index = price_df.index.tz_localize("UTC")
+            price_df.index = price_df.index.tz_convert(NYSE_TZ)
         except Exception:
             pass
-    try:
-        price_df.index = price_df.index.tz_convert(NYSE_TZ)
-    except Exception:
-        pass
+    else:
+        # Still not a DatetimeIndex — can't filter by time
+        fig.add_annotation(text="Price data: invalid index",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False, font=dict(color=CS["text"], size=14))
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
+                          height=600, margin=dict(l=20, r=20, t=30, b=20))
+        return fig
 
     # Get today's date in ET (or last available trading day)
     today_et = now_et().date()
