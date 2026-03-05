@@ -27,6 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -q requests pandas numpy scipy pytz plotly
+          pip install -q git+https://github.com/rongardF/tvdatafeed.git
 
       - name: Run snapshot worker
         working-directory: gexdonindex
