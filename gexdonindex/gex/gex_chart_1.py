@@ -1,7 +1,7 @@
 """
 Chart 1 — Gamma Exposure Density by Strike (Plotly, Dual Y-Axis)
 Multi-DTE aware: each option row has its own t_expiry.
-Uses Barchart pre-computed gamma when available, BS fallback.
+Uses source pre-computed gamma when available, BS fallback.
 
 Implements:
   - Dual y-axis: Left = Sell/Buy/Total Gamma (positive). Right = Net GEX (signed + shading)
@@ -334,8 +334,8 @@ def generate_gex_chart(data, percent_range=0.03):
     )
 
     # ── Layout ──
-    iv_tag = "Barchart IV" if fb_iv is None else f"Est IV {fb_iv:.3f}"
-    title = f"Gamma Density ({exp_lbl}) — {iv_tag} [{source.upper()}]"
+    iv_tag = "Market IV" if fb_iv is None else f"Est IV {fb_iv:.3f}"
+    title = f"Gamma Density ({exp_lbl}) — {iv_tag}"
 
     fig.update_layout(
         template="plotly_dark",
