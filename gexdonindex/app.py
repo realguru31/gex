@@ -1,6 +1,6 @@
 """
 GEXdon Index — Real-time GEX Dashboard for SPY, QQQ, SPX, NDX
-ZERO yfinance. Barchart (options+spot) + tvdatafeed (price chart).
+Real-time GEX Dashboard for SPY, QQQ, SPX, NDX.
 """
 import os
 import sys
@@ -89,8 +89,43 @@ def snapshot_dir(ticker, date_str=None):
 
 def snapshot_filename(bucket_time):
     if isinstance(bucket_time, datetime):
-        return bucket_time.strftime("%H%M") + ".pkl"
-    return bucket_time.strftime("%H%M") + ".pkl"
+        return bucket_time.strftime("%H%M") + ".json"
+    return bucket_time.strftime("%H%M") + ".json"
+
+
+def _snap_to_json(snapshot_data):
+    """Convert snapshot to JSON-serializable dict."""
+    import plotly
+    out = {}
+    for k, v in snapshot_data.items():
+        if isinstance(v, pd.DataFrame):
+            out[k] = {"__df__": True, "data": v.to_dict(orient="list")}
+        elif hasattr(v, "to_plotly_json"):
+            # Plotly Figure
+            out[k] = {"__plotly__": True, "data": v.to_plotly_json()}
+        elif isinstance(v, (np.integer,)):
+            out[k] = int(v)
+        elif isinstance(v, (np.floating,)):
+            out[k] = float(v)
+        elif isinstance(v, np.ndarray):
+            out[k] = v.tolist()
+        else:
+            out[k] = v
+    return out
+
+
+def _snap_from_json(raw):
+    """Restore snapshot from JSON dict."""
+    out = {}
+    for k, v in raw.items():
+        if isinstance(v, dict) and v.get("__df__"):
+            out[k] = pd.DataFrame(v["data"])
+        elif isinstance(v, dict) and v.get("__plotly__"):
+            out[k] = go.Figure(v["data"])
+        else:
+            out[k] = v
+    return out
+
 
 def save_snapshot(ticker, bucket_dt, snapshot_data):
     sdir = snapshot_dir(ticker)
@@ -98,8 +133,9 @@ def save_snapshot(ticker, bucket_dt, snapshot_data):
     fpath = os.path.join(sdir, fname)
     if os.path.exists(fpath):
         return False
-    with open(fpath, "wb") as f:
-        pickle.dump(snapshot_data, f)
+    import json
+    with open(fpath, "w") as f:
+        json.dump(_snap_to_json(snapshot_data), f, default=str)
     return True
 
 def load_snapshot(ticker, bucket_dt, date_str=None):
@@ -107,17 +143,26 @@ def load_snapshot(ticker, bucket_dt, date_str=None):
     fname = snapshot_filename(bucket_dt)
     fpath = os.path.join(sdir, fname)
     if not os.path.exists(fpath):
+        # Fallback: try .pkl for old snapshots
+        pkl_path = fpath.replace(".json", ".pkl")
+        if os.path.exists(pkl_path):
+            try:
+                with open(pkl_path, "rb") as f:
+                    return pickle.load(f)
+            except Exception:
+                return None
         return None
-    with open(fpath, "rb") as f:
-        return pickle.load(f)
+    import json
+    with open(fpath, "r") as f:
+        return _snap_from_json(json.load(f))
 
 def list_snapshots(ticker, date_str=None):
     """List snapshot HHMM strings for a date, sorted."""
     sdir = snapshot_dir(ticker, date_str)
     if not os.path.exists(sdir):
         return []
-    files = sorted([f for f in os.listdir(sdir) if f.endswith(".pkl")])
-    return [f.replace(".pkl", "") for f in files]
+    files = sorted([f for f in os.listdir(sdir) if f.endswith((".json", ".pkl"))])
+    return [f.replace(".json", "").replace(".pkl", "") for f in files]
 
 def delete_all_snapshots(ticker):
     """Delete all snapshot directories for a ticker."""
@@ -460,7 +505,7 @@ def create_volume_chart(calls_df, puts_df, spot, percent_range=0.03):
 # ─────────────────────────────────────
 def init_state():
     defaults = {
-        "ticker": "SPY",
+        "ticker": "SPX",
         "strike_range": 0.03,
         "max_dte": 0,
         "slider_time": None,
@@ -598,14 +643,14 @@ with st.sidebar:
 # Compute Live Data
 # ─────────────────────────────────────
 def compute_live():
-    with st.spinner("Fetching from Barchart..."):
+    with st.spinner("Fetching options data..."):
         snap = compute_gex_snapshot(
             st.session_state.ticker,
             st.session_state.strike_range,
             st.session_state.max_dte,
         )
     if snap is None:
-        st.error("❌ Failed to fetch options data. Barchart may be unavailable.")
+        st.error("❌ Failed to fetch options data. Source may be unavailable.")
         return None
 
     st.session_state.live_snapshot = snap
@@ -803,7 +848,7 @@ if snap is not None:
             )
             st.caption(
                 "C_OI/P_OI = Open Interest | C_IV/P_IV = Implied Vol (%) | "
-                "C_GEX/P_GEX = BS Gamma × OI × 100 | BC_Gamma = Barchart pre-computed gamma × OI × 100 | "
+                "C_GEX/P_GEX = BS Gamma × OI × 100 | BC_Gamma = Source pre-computed gamma × OI × 100 | "
                 "C_Charm/P_Charm = BS Charm × OI × 100 | Net = Calls - Puts (GEX) or Calls + Puts (Charm) | "
                 "Expiries = # expiry chains at this strike"
             )
