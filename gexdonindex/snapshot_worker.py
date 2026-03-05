@@ -1,14 +1,16 @@
 """
 GEXdon Snapshot Worker — Headless chain fetcher for GitHub Actions.
 No Streamlit dependency. Fetches options chains for all tickers,
-computes GEX/Charm, and saves snapshots as pickle files.
+computes GEX/Charm, and saves snapshots as JSON files.
 
 Usage: python snapshot_worker.py
 """
 import os
 import sys
-import pickle
+import json
 import pytz
+import numpy as np
+import pandas as pd
 from datetime import datetime, time as dtime
 
 # Ensure we can import from gex/
@@ -72,7 +74,7 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
 
     # Check if already saved
     sdir = snapshot_dir(ticker, date_str)
-    fpath = os.path.join(sdir, f"{hhmm}.pkl")
+    fpath = os.path.join(sdir, f"{hhmm}.json")
     if os.path.exists(fpath):
         print(f"  ⏭  {ticker} {period}({hhmm}) — already exists, skipping")
         return True
@@ -100,39 +102,54 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
     diag_table = build_diagnostic_table(data, percent_range)
     diag_info = data.get("diagnostics", {})
 
-    # Ensure DataFrames use plain dtypes for pickle compatibility
-    # (GitHub Actions pandas may use StringDtype which Streamlit Cloud pandas can't unpickle)
-    def _normalize_df(df):
+    def _df_to_dict(df):
+        """Convert DataFrame to JSON-safe dict."""
         if df is None:
-            return df
-        for col in df.columns:
-            if hasattr(df[col], 'dtype') and str(df[col].dtype) == 'string':
-                df[col] = df[col].astype(object)
-        return df
+            return None
+        return {"__df__": True, "data": df.to_dict(orient="list")}
+
+    def _fig_to_dict(fig):
+        """Convert Plotly Figure to JSON-safe dict."""
+        return {"__plotly__": True, "data": fig.to_plotly_json()}
+
+    def _default(obj):
+        """JSON default serializer for numpy types."""
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (pd.Timestamp, datetime)):
+            return str(obj)
+        return str(obj)
 
     snapshot = {
         "timestamp": now_et().isoformat(),
         "ticker": ticker,
         "percent_range": percent_range,
         "max_dte": max_dte,
-        "spot": spot,
+        "spot": float(spot),
         "expiry": data["expiry"],
         "expiry_label": data["expiry_label"],
-        "iv_coverage": data["iv_coverage"],
-        "fallback_iv": data["fallback_iv"],
+        "iv_coverage": float(data["iv_coverage"]),
+        "fallback_iv": float(data["fallback_iv"]) if data["fallback_iv"] is not None else None,
         "source": data.get("source", "barchart"),
         "fetched_expiries": data.get("fetched_expiries", []),
-        "fig1": fig1, "fig2": fig2, "fig3": fig3,
-        "levels": all_levels,
-        "calls": _normalize_df(data["calls"].copy()),
-        "puts": _normalize_df(data["puts"].copy()),
-        "diag_table": _normalize_df(diag_table.copy() if diag_table is not None else None),
+        "fig1": _fig_to_dict(fig1),
+        "fig2": _fig_to_dict(fig2),
+        "fig3": _fig_to_dict(fig3),
+        "levels": {k: float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v
+                   for k, v in all_levels.items() if v is not None and not isinstance(v, list)},
+        "calls": _df_to_dict(data["calls"]),
+        "puts": _df_to_dict(data["puts"]),
+        "diag_table": _df_to_dict(diag_table),
         "diag_info": diag_info,
     }
 
-    # Save
-    with open(fpath, "wb") as f:
-        pickle.dump(snapshot, f)
+    # Save as JSON
+    with open(fpath, "w") as f:
+        json.dump(snapshot, f, default=_default)
 
     print(f"  ✓  {ticker} {period}({hhmm}) — spot=${spot:.2f}, "
           f"{len(data['calls'])}C/{len(data['puts'])}P, "
