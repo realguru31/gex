@@ -74,8 +74,8 @@ def generate_charm_chart(data, percent_range=0.03):
         nc = gaussian_filter1d(nc, 1.5)
         tc = gaussian_filter1d(tc, 1.5)
 
-    iv_tag = "Barchart IV" if fb_iv is None else f"Est IV {fb_iv:.3f}"
-    title = f"Charm Density ({exp_lbl}) — {iv_tag} [{source.upper()}]"
+    iv_tag = "Market IV" if fb_iv is None else f"Est IV {fb_iv:.3f}"
+    title = f"Charm Density ({exp_lbl}) — {iv_tag}"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=st, y=cc, name="Call Charm", line=dict(color=CS["green"], width=2.5), opacity=0.8))
