@@ -84,7 +84,10 @@ def snapshot_dir(ticker, date_str=None):
     if date_str is None:
         date_str = now_et().strftime("%Y-%m-%d")
     path = os.path.join(APP_DIR, SNAPSHOT_DIR, ticker.replace("^", "_"), date_str)
-    os.makedirs(path, exist_ok=True)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass  # Read-only filesystem (Streamlit Cloud) — directory may already exist from repo
     return path
 
 def snapshot_filename(bucket_time):
@@ -623,7 +626,7 @@ with st.sidebar:
         available_dates = sorted([
             d for d in os.listdir(ticker_snap_dir)
             if os.path.isdir(os.path.join(ticker_snap_dir, d))
-            and any(f.endswith(".pkl") for f in os.listdir(os.path.join(ticker_snap_dir, d)))
+            and any(f.endswith((".json", ".pkl")) for f in os.listdir(os.path.join(ticker_snap_dir, d)))
         ], reverse=True)
 
     today_str = now_et().strftime("%Y-%m-%d")
