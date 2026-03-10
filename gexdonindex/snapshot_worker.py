@@ -30,7 +30,7 @@ from gex.gex_chart_3 import generate_pressure_chart
 # ─────────────────────────────────────
 # Config — what to capture
 # ─────────────────────────────────────
-SNAPSHOT_TICKERS = TICKERS  # All 4: SPY, QQQ, SPX, NDX
+SNAPSHOT_TICKERS = ["SPY", "QQQ", "SPX"]  # NDX excluded (low OI/volume)
 DEFAULT_STRIKE_RANGE = 0.03
 DEFAULT_MAX_DTE = 0  # 0DTE by default
 
