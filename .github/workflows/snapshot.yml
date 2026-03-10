@@ -2,11 +2,11 @@ name: GEXdon Snapshot Worker
 
 on:
   schedule:
-    # Every 30 min during RTH: 14:00-20:30 UTC = 9:00-15:30 ET (covers A through M periods)
-    # GitHub cron is UTC. Market profile periods:
-    # A=09:30 (14:30 UTC), B=10:00 (15:00), ..., M=15:30 (20:30), N=16:00 (21:00)
-    # We start at 14:00 to ensure 09:30 ET bucket is captured
-    - cron: '0,30 14,15,16,17,18,19,20 * * 1-5'
+    # Every 15 min during RTH to maximize chance of capturing all 30-min buckets.
+    # GitHub Actions cron can delay/skip runs, so 15-min intervals give 2 chances per bucket.
+    # 14:00-21:00 UTC = 9:00-16:00 ET (covers A through N periods)
+    # Worker deduplicates: if a bucket's snapshot exists, it skips.
+    - cron: '0,15,30,45 14,15,16,17,18,19,20 * * 1-5'
   workflow_dispatch:  # Allow manual trigger for testing
 
 jobs:
