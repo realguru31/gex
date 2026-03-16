@@ -220,7 +220,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
     fig = go.Figure()
     if price_df.empty:
         fig.add_annotation(text="No price data", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False, font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=1550)
         return fig
     if not isinstance(price_df.index, pd.DatetimeIndex):
         for cn in ["datetime","date","time","index"]:
@@ -235,7 +235,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
         try: price_df.index = price_df.index.tz_convert(NYSE_TZ)
         except: pass
     else:
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=1550)
         return fig
     today_et = now_et().date()
     avail = sorted(set(price_df.index.date))
@@ -244,7 +244,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
     rth = day_df[(day_df.index.time >= dtime(9,30)) & (day_df.index.time <= dtime(16,0))]
     if rth.empty: rth = day_df
     if rth.empty:
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=1550)
         return fig
     tl = [t.strftime("%H:%M") for t in rth.index]
     full = []; h,m = 9,30
@@ -272,7 +272,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
         xaxis=dict(gridcolor=CS["grid"], rangeslider_visible=False, categoryorder="array", categoryarray=full,
                    range=[-0.5,len(full)-0.5], nticks=14),
         yaxis=dict(gridcolor=CS["grid"], title="Price", tickformat=".0f"),
-        margin=dict(l=60,r=10,t=35,b=30), height=750, showlegend=False)
+        margin=dict(l=60,r=10,t=35,b=30), height=1550, showlegend=False)
     return fig
 
 # ── Net OI / Volume Charts ──
@@ -313,6 +313,92 @@ def create_volume_chart(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
         xaxis=dict(gridcolor=CS["grid"],title="Net Vol",zeroline=True,zerolinecolor=CS["text"]),
         yaxis=dict(gridcolor=CS["grid"],tickformat=".0f",dtick=dtick),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=500,bargap=0.15)
     return fig
+
+
+def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
+    """
+    Combined OI + Volume chart — vertical bars, strike on X-axis.
+    Call OI/Vol go UP, Put OI/Vol go DOWN. Volume overlaid as brighter bars.
+    Aligned to same strike axis as GEX/Charm charts above.
+    """
+    fig = go.Figure()
+    if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=300)
+        return fig
+
+    rng = spot * pct
+
+    # Call OI and Volume
+    c_oi = calls_df[(calls_df["strikePrice"] >= spot-rng) & (calls_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["openInterest"].sum()
+    c_vol = calls_df[(calls_df["strikePrice"] >= spot-rng) & (calls_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["volume"].sum()
+
+    # Put OI and Volume
+    p_oi = puts_df[(puts_df["strikePrice"] >= spot-rng) & (puts_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["openInterest"].sum()
+    p_vol = puts_df[(puts_df["strikePrice"] >= spot-rng) & (puts_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["volume"].sum()
+
+    # Align all to same strike index
+    all_strikes = sorted(set(c_oi.index) | set(c_vol.index) | set(p_oi.index) | set(p_vol.index))
+    if len(all_strikes) < 1:
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=300)
+        return fig
+
+    c_oi = c_oi.reindex(all_strikes, fill_value=0)
+    c_vol = c_vol.reindex(all_strikes, fill_value=0)
+    p_oi = p_oi.reindex(all_strikes, fill_value=0)
+    p_vol = p_vol.reindex(all_strikes, fill_value=0)
+
+    # Call OI (faded blue, UP)
+    fig.add_trace(go.Bar(
+        x=all_strikes, y=c_oi.values, name="Call OI",
+        marker_color="rgba(30,144,255,0.3)", width=3 if ticker in ("SPX","NDX") else 0.7,
+    ))
+    # Call Volume (bright blue, UP, overlaid)
+    fig.add_trace(go.Bar(
+        x=all_strikes, y=c_vol.values, name="Call Vol",
+        marker_color="rgba(30,144,255,0.85)", width=3 if ticker in ("SPX","NDX") else 0.7,
+    ))
+    # Put OI (faded orange, DOWN — negative)
+    fig.add_trace(go.Bar(
+        x=all_strikes, y=-p_oi.values, name="Put OI",
+        marker_color="rgba(255,140,0,0.3)", width=3 if ticker in ("SPX","NDX") else 0.7,
+    ))
+    # Put Volume (bright orange, DOWN — negative, overlaid)
+    fig.add_trace(go.Bar(
+        x=all_strikes, y=-p_vol.values, name="Put Vol",
+        marker_color="rgba(255,140,0,0.85)", width=3 if ticker in ("SPX","NDX") else 0.7,
+    ))
+
+    # Spot vertical line
+    fig.add_vline(x=spot, line=dict(color=CS["cyan"], width=2, dash="dash"),
+                  annotation_text=f"Spot {spot:.0f}",
+                  annotation_font_color=CS["cyan"],
+                  annotation_font_size=9,
+                  annotation_position="top")
+
+    # Zero line
+    fig.add_hline(y=0, line=dict(color=CS["text"], width=0.5))
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=dict(text="Positioning: OI (faded) + Volume (bright) — Calls ▲ Puts ▼",
+                   font=dict(color=CS["text"], size=12)),
+        paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
+        font=dict(color=CS["text"], size=9),
+        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat=".0f"),
+        yaxis=dict(gridcolor=CS["grid"], title="Contracts", zeroline=True,
+                   zerolinecolor=CS["text"], zerolinewidth=1),
+        barmode="overlay",
+        legend=dict(
+            bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
+            font=dict(size=10, color="#ffffff"),
+            orientation="v", yanchor="top", y=0.98, xanchor="right", x=0.99,
+        ),
+        margin=dict(l=50, r=10, t=35, b=30),
+        height=300,
+        bargap=0.05,
+    )
+    return fig
+
 
 # ── Session State ──
 def init_state():
@@ -471,14 +557,16 @@ if snap is not None:
         pf = create_price_chart(st.session_state.ticker, gex_levels=snap.get("levels"), spot=snap["spot"],
             stored_price_df=sp if isinstance(sp, pd.DataFrame) else None)
         st.plotly_chart(pf, width="stretch", theme=None, key="price_chart")
-        st.plotly_chart(create_positions_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"],st.session_state.ticker),
-            width="stretch", theme=None, key="pos_chart")
-        st.plotly_chart(create_volume_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"],st.session_state.ticker),
-            width="stretch", theme=None, key="vol_chart")
     with col_g:
         st.plotly_chart(snap["fig1"], width="stretch", theme=None, key="gex_chart_1")
         st.plotly_chart(snap["fig2"], width="stretch", theme=None, key="gex_chart_2")
         st.plotly_chart(snap["fig3"], width="stretch", theme=None, key="gex_chart_3")
+
+    # ── OI + Volume Combined Chart (full width, bottom) ──
+    oi_vol_fig = create_oi_volume_combined(
+        snap.get("calls"), snap.get("puts"), snap["spot"],
+        snap["percent_range"], st.session_state.ticker)
+    st.plotly_chart(oi_vol_fig, width="stretch", theme=None, key="oi_vol_combined")
 
     # ── Key Levels ──
     levels = snap.get("levels",{})
