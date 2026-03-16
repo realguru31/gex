@@ -624,6 +624,7 @@ if snap is not None:
     # ── TradingView Lightweight Charts ──
     with st.expander("📈 TradingView Chart (Experimental)", expanded=False):
         spd = snap.get("price_data"); tvl = snap.get("levels",{}); sv = snap.get("spot",0)
+        tv_ticker = TICKER_DISPLAY.get(snap.get("ticker","SPX"), snap.get("ticker","SPX"))
         if isinstance(spd, pd.DataFrame) and not spd.empty:
             pdf = spd.copy()
             if not isinstance(pdf.index, pd.DatetimeIndex):
@@ -637,34 +638,46 @@ if snap is not None:
                     except: pass
                 try: pdf.index=pdf.index.tz_convert(NYSE_TZ)
                 except: pass
-                rth=pdf[(pdf.index.time>=dtime(9,30))&(pdf.index.time<=dtime(16,0))]
-                if rth.empty: rth=pdf
+                # Use ALL available data (no RTH filter)
                 cd=[{"time":int(ts.timestamp()),"open":float(r.get("Open",0)),"high":float(r.get("High",0)),
-                     "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in rth.iterrows()]
+                     "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in pdf.iterrows()]
                 pls=""
                 for key,(lbl,clr) in {"gamma_k_star":("K*","magenta"),"gamma_forward_price":("Fwd F","#ffffff"),
                     "gamma_zero_gamma":("Γ Flip","darkgoldenrod"),"gamma_call_wall":("Call Wall","#00ff88"),
                     "gamma_put_wall":("Put Wall","#ff4757"),"pressure_pressure_eq":("P.Eq","#a855f7")}.items():
                     if key in tvl:
                         val=float(tvl[key])
-                        pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} ${val:.0f}'}});\n"
-                if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot ${float(sv):.2f}'}});\n"
+                        pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} {val:.0f}'}});\n"
+                if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot {float(sv):.0f}'}});\n"
                 cj=json_mod.dumps(cd)
-                html=f"""<div id="tv-chart" style="width:100%;height:500px"></div>
+                html=f"""
+                <div id="tv-chart" style="width:100%;height:600px;position:relative;">
+                    <div style="position:absolute;top:10px;left:15px;z-index:10;font-family:monospace;font-size:18px;font-weight:bold;color:rgba(200,214,229,0.5);pointer-events:none;">{tv_ticker}</div>
+                </div>
                 <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
                 <script>
-                const chart=LightweightCharts.createChart(document.getElementById('tv-chart'),{{width:document.getElementById('tv-chart').clientWidth,height:500,
+                const chart=LightweightCharts.createChart(document.getElementById('tv-chart'),{{
+                    width:document.getElementById('tv-chart').clientWidth,
+                    height:600,
                     layout:{{background:{{type:'solid',color:'#050b1e'}},textColor:'#c8d6e5'}},
                     grid:{{vertLines:{{color:'#1a3a5c'}},horzLines:{{color:'#1a3a5c'}}}},
                     crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
-                    rightPriceScale:{{borderColor:'#1a3a5c'}},
-                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false}}}});
-                const series=chart.addCandlestickSeries({{upColor:'#1e90ff',downColor:'#ff00ff',
-                    borderUpColor:'#1e90ff',borderDownColor:'#ff00ff',wickUpColor:'#1e90ff',wickDownColor:'#ff00ff'}});
-                series.setData({cj});{pls}chart.timeScale().fitContent();
+                    rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}}}},
+                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false}},
+                    handleScroll:{{vertTouchDrag:true}},
+                    handleScale:{{axisPressedMouseMove:true,mouseWheel:true,pinch:true}},
+                }});
+                const series=chart.addCandlestickSeries({{
+                    upColor:'#1e90ff',downColor:'#ff00ff',
+                    borderUpColor:'#1e90ff',borderDownColor:'#ff00ff',
+                    wickUpColor:'#1e90ff',wickDownColor:'#ff00ff',
+                }});
+                series.setData({cj});
+                {pls}
+                chart.timeScale().fitContent();
                 new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
                 </script>"""
-                st.components.v1.html(html, height=520)
+                st.components.v1.html(html, height=620)
             else: st.info("Price data not available for TradingView chart")
         else: st.info("No stored price data — requires snapshot with price data")
 else:
