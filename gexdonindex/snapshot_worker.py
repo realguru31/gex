@@ -51,7 +51,7 @@ def compute_and_save(ticker, percent_range, max_dte, bucket_dt):
         return False
 
     spot = data["spot"]
-    price_df = fetch_price_data(ticker, n_bars=200)
+    price_df = fetch_price_data(ticker, n_bars=600)
     fig1, levels1 = generate_gex_chart(data, percent_range)
     fig2, levels2 = generate_charm_chart(data, percent_range)
     fig3, levels3 = generate_pressure_chart(data, percent_range)
