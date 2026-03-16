@@ -140,9 +140,27 @@ REGIME_TABLE = {
 
 def _vex_zone(snap):
     vex = snap.get("vex_info",{})
-    net = vex.get("net_vex",0); flip = vex.get("vex_flip"); spot = snap.get("spot",0)
-    if flip and abs(spot - flip) < spot * 0.003: return "transition"
-    return "positive" if net > 0 else "negative"
+    pct = vex.get("vex_pct", 0)
+    if abs(pct) < 30:
+        return "transition"
+    return "positive" if pct > 0 else "negative"
+
+def _vex_label(snap):
+    """Return display label like '+67% VEX' or '-12% VEX (transition)'"""
+    vex = snap.get("vex_info",{})
+    pct = vex.get("vex_pct", 0)
+    zone = _vex_zone(snap)
+    if zone == "transition":
+        return f"{pct:+.0f}% VEX (transition)"
+    return f"{pct:+.0f}% VEX"
+
+def _vex_label_from_model(m):
+    """Return VEX label from model result dict."""
+    pct = m.get("vex_pct", 0)
+    zone = m.get("vex_zone", "neutral")
+    if zone == "transition":
+        return f"{pct:+.0f}% VEX (transition)"
+    return f"{pct:+.0f}% VEX"
 
 def assess_regime_model1(snap, view_date=None):
     vex = snap.get("vex_info"); 
@@ -168,7 +186,7 @@ def assess_regime_model1(snap, view_date=None):
     zone = _vex_zone(snap)
     beh, col = REGIME_TABLE.get((iv_state, zone), ("Unknown", CS["gold"]))
     return {"model":"Model 1 (Theta Decay)","iv_state":iv_state,"vex_zone":zone,"behavior":beh,"color":col,
-            "atm_iv":atm_iv,"open_iv":open_iv,"expected_iv":expected,"net_vex":vex.get("net_vex",0)}
+            "atm_iv":atm_iv,"open_iv":open_iv,"expected_iv":expected,"net_vex":vex.get("net_vex",0),"vex_pct":vex.get("vex_pct",0)}
 
 def assess_regime_model2(snap, prev_snap=None):
     vex = snap.get("vex_info")
@@ -182,7 +200,7 @@ def assess_regime_model2(snap, prev_snap=None):
     zone = _vex_zone(snap)
     beh, col = REGIME_TABLE.get((iv_state, zone), ("Unknown", CS["gold"]))
     return {"model":"Model 2 (Periodic)","iv_state":iv_state,"vex_zone":zone,"behavior":beh,"color":col,
-            "atm_iv":atm_iv,"prev_iv":prev_iv,"net_vex":vex.get("net_vex",0)}
+            "atm_iv":atm_iv,"prev_iv":prev_iv,"net_vex":vex.get("net_vex",0),"vex_pct":vex.get("vex_pct",0)}
 
 # ── Compute GEX Snapshot ──
 @st.cache_data(ttl=60, show_spinner=False)
@@ -527,23 +545,23 @@ if snap is not None:
         rc1,rc2 = st.columns(2)
         with rc1:
             if m1:
-                il = m1["iv_state"].upper(); vl = "+VEX" if m1["vex_zone"]=="positive" else "-VEX" if m1["vex_zone"]=="negative" else "Transition"
+                il = m1["iv_state"].upper(); vl = _vex_label_from_model(m1)
                 st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m1["color"]}33;background:{m1["color"]}22">'
                     f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 1 (Theta Decay)</span><br>'
                     f'<span style="color:{m1["color"]};font-size:14px;font-weight:bold">● IV {il} · {vl} · {m1["behavior"]}</span><br>'
-                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m1["atm_iv"]*100:.1f}% | Open: {m1["open_iv"]*100:.1f}% | Expected: {m1["expected_iv"]*100:.1f}% | VEX: {m1["net_vex"]:+,.0f}</span></div>',
+                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m1["atm_iv"]*100:.1f}% | Open: {m1["open_iv"]*100:.1f}% | Expected: {m1["expected_iv"]*100:.1f}% | VEX: {m1["vex_pct"]:+.0f}% ({m1["net_vex"]:+,.0f})</span></div>',
                     unsafe_allow_html=True)
             else:
                 st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {CS["grid"]};background:{CS["plot_bg"]}">'
                     f'<span style="color:{CS["text"]};font-size:12px">Model 1 (Theta Decay): Needs opening snapshot (A period)</span></div>', unsafe_allow_html=True)
         with rc2:
             if m2:
-                il = m2["iv_state"].upper(); vl = "+VEX" if m2["vex_zone"]=="positive" else "-VEX" if m2["vex_zone"]=="negative" else "Transition"
+                il = m2["iv_state"].upper(); vl = _vex_label_from_model(m2)
                 piv = f" | Prev: {m2['prev_iv']*100:.1f}%" if m2.get("prev_iv") else ""
                 st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m2["color"]}33;background:{m2["color"]}22">'
                     f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 2 (Periodic)</span><br>'
                     f'<span style="color:{m2["color"]};font-size:14px;font-weight:bold">● IV {il} · {vl} · {m2["behavior"]}</span><br>'
-                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m2["atm_iv"]*100:.1f}%{piv} | VEX: {m2["net_vex"]:+,.0f}</span></div>',
+                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m2["atm_iv"]*100:.1f}%{piv} | VEX: {m2["vex_pct"]:+.0f}% ({m2["net_vex"]:+,.0f})</span></div>',
                     unsafe_allow_html=True)
             else:
                 st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {CS["grid"]};background:{CS["plot_bg"]}">'
@@ -593,7 +611,7 @@ if snap is not None:
                 for k,l,f in [("pressure_max_pressure_strike","Max P","{:.0f}"),("pressure_pressure_eq","Equilibrium","{:.0f}")]:
                     if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
                 vx = snap.get("vex_info",{})
-                if vx.get("net_vex") is not None: st.markdown(f"Net VEX: **{vx['net_vex']:+,.0f}**")
+                if vx.get("net_vex") is not None: st.markdown(f"VEX: **{vx.get('vex_pct',0):+.0f}%** ({vx['net_vex']:+,.0f})")
                 if vx.get("vex_flip") is not None: st.markdown(f"VEX Flip: **${vx['vex_flip']:.1f}**")
 
     # ── Diagnostics ──
