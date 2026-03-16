@@ -264,20 +264,20 @@ def generate_gex_chart(data, percent_range=0.03):
     # ── Vertical reference lines ──
     # Spot
     fig.add_vline(x=spot, line=dict(color=CS["cyan"], width=2.5, dash="dash"),
-                  annotation_text=f"Spot ${spot:.2f}",
+                  annotation_text=f"Spot {spot:.0f}",
                   annotation_font_color=CS["cyan"],
                   annotation_font_size=9)
 
     # K* (optimal strike)
     fig.add_vline(x=K_star, line=dict(color="magenta", width=3, dash="dot"),
-                  annotation_text=f"K* ${K_star:.0f}",
+                  annotation_text=f"K* {K_star:.0f}",
                   annotation_font_color="magenta",
                   annotation_font_size=9,
                   annotation_position="bottom right")
 
     # Forward Price at K*
     fig.add_vline(x=F_at_Kstar, line=dict(color="#ffffff", width=2, dash="dashdot"),
-                  annotation_text=f"Fwd ${F_at_Kstar:.2f}",
+                  annotation_text=f"Fwd {F_at_Kstar:.0f}",
                   annotation_font_color="#ffffff",
                   annotation_font_size=9,
                   annotation_position="top left")
@@ -285,7 +285,7 @@ def generate_gex_chart(data, percent_range=0.03):
     # Gamma Flip vertical lines
     for i, flip in enumerate(gamma_flips):
         fig.add_vline(x=flip, line=dict(color="darkgoldenrod", width=2, dash="dash"),
-                      annotation_text=f"Flip ${flip:.0f}" if i == 0 else f"${flip:.0f}",
+                      annotation_text=f"Flip {flip:.0f}" if i == 0 else f"{flip:.0f}",
                       annotation_font_color="darkgoldenrod",
                       annotation_font_size=8,
                       annotation_position="top right")
@@ -297,7 +297,7 @@ def generate_gex_chart(data, percent_range=0.03):
             y=[p[1] for p in sell_peaks],
             mode="markers+text",
             marker=dict(color=CS["red"], size=10, symbol="triangle-down"),
-            text=[f"${p[0]:.0f}" for p in sell_peaks],
+            text=[f"{p[0]:.0f}" for p in sell_peaks],
             textposition="top center",
             textfont=dict(color=CS["red"], size=8),
             name="Sell Peak", showlegend=False,
@@ -309,7 +309,7 @@ def generate_gex_chart(data, percent_range=0.03):
             y=[p[1] for p in buy_peaks],
             mode="markers+text",
             marker=dict(color=CS["green"], size=10, symbol="triangle-up"),
-            text=[f"${p[0]:.0f}" for p in buy_peaks],
+            text=[f"{p[0]:.0f}" for p in buy_peaks],
             textposition="top center",
             textfont=dict(color=CS["green"], size=8),
             name="Buy Peak", showlegend=False,
@@ -317,9 +317,9 @@ def generate_gex_chart(data, percent_range=0.03):
 
     # ── Annotation Box (K* details) ──
     ann_text = (
-        f"Spot: ${spot:.2f}<br>"
-        f"K* (Optimal): ${K_star:.2f}<br>"
-        f"Forward F: ${F_at_Kstar:.2f}<br>"
+        f"Spot: {spot:.0f}<br>"
+        f"K* (Optimal): {K_star:.0f}<br>"
+        f"Forward F: {F_at_Kstar:.0f}<br>"
         f"f(x) at K*: {fx_k:.4f}<br>"
         f"Bounds: [{fmin_k:.2f}, {fmax_k:.2f}]<br>"
         f"{'⚠ Contradiction' if contr_k else '✓ No contradiction'}"
@@ -342,7 +342,7 @@ def generate_gex_chart(data, percent_range=0.03):
         title=dict(text=title, font=dict(color=CS["text"], size=13)),
         paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
         font=dict(color=CS["text"], size=10),
-        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat="$,.0f"),
+        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat=".0f"),
         legend=dict(bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
                     font=dict(size=10, color="#ffffff"),
                     orientation="h", yanchor="bottom", y=1.02,

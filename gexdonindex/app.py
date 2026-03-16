@@ -253,7 +253,7 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
         increasing=dict(line=dict(color="dodgerblue"),fillcolor="dodgerblue"),
         decreasing=dict(line=dict(color="magenta"),fillcolor="magenta"), name="Price"))
     if spot:
-        fig.add_hline(y=spot, line=dict(color=CS["cyan"],width=1.5), annotation_text=f"${spot:.2f}",
+        fig.add_hline(y=spot, line=dict(color=CS["cyan"],width=1.5), annotation_text=f"{spot:.0f}",
                       annotation_font_color=CS["cyan"], annotation_position="right")
     if gex_levels:
         ls = {"gamma_k_star":("K*","magenta","dot"),"gamma_forward_price":("Fwd F","#ffffff","dashdot"),
@@ -264,52 +264,54 @@ def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None)
         for key,(lbl,clr,dsh) in ls.items():
             if key in gex_levels:
                 v = gex_levels[key]
-                fig.add_hline(y=v, line=dict(color=clr,width=1.2,dash=dsh), annotation_text=f"{lbl} ${v:.0f}",
+                fig.add_hline(y=v, line=dict(color=clr,width=1.2,dash=dsh), annotation_text=f"{lbl} {v:.0f}",
                               annotation_font_color=clr, annotation_font_size=9, annotation_position="left")
     dt = TICKER_DISPLAY.get(ticker, ticker)
     fig.update_layout(template="plotly_dark", title=dict(text=f"{dt} RTH", font=dict(color=CS["text"],size=13)),
         paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], font=dict(color=CS["text"],size=10),
         xaxis=dict(gridcolor=CS["grid"], rangeslider_visible=False, categoryorder="array", categoryarray=full,
                    range=[-0.5,len(full)-0.5], nticks=14),
-        yaxis=dict(gridcolor=CS["grid"], title="Price", tickformat="$,.2f"),
+        yaxis=dict(gridcolor=CS["grid"], title="Price", tickformat=".0f"),
         margin=dict(l=60,r=10,t=35,b=30), height=750, showlegend=False)
     return fig
 
 # ── Net OI / Volume Charts ──
-def create_positions_chart(calls_df, puts_df, spot, pct=0.03):
+def create_positions_chart(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     fig = go.Figure()
     if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
-        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=500); return fig
     rng = spot*pct
     co = calls_df[(calls_df["strikePrice"]>=spot-rng)&(calls_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["openInterest"].sum().reset_index(); co.columns=["strike","c"]
     po = puts_df[(puts_df["strikePrice"]>=spot-rng)&(puts_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["openInterest"].sum().reset_index(); po.columns=["strike","p"]
     oi = pd.merge(co,po,on="strike",how="outer").fillna(0).sort_values("strike"); oi["net"]=oi["c"]-oi["p"]
-    if len(oi)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    if len(oi)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=500); return fig
+    dtick = 5 if ticker in ("SPX","NDX") else 1
     colors = ["dodgerblue" if v>=0 else CS["orange"] for v in oi["net"]]
     fig.add_trace(go.Bar(y=oi["strike"],x=oi["net"],orientation="h",marker_color=colors,opacity=0.85))
-    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot ${spot:.2f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
+    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot {spot:.0f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
     fig.update_layout(template="plotly_dark",title=dict(text="Net OI by Strike (C-P)",font=dict(color=CS["text"],size=12)),
         paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],font=dict(color=CS["text"],size=9),
         xaxis=dict(gridcolor=CS["grid"],title="Net OI",zeroline=True,zerolinecolor=CS["text"]),
-        yaxis=dict(gridcolor=CS["grid"],tickformat="$,.0f",dtick=5),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=400,bargap=0.15)
+        yaxis=dict(gridcolor=CS["grid"],tickformat=".0f",dtick=dtick),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=500,bargap=0.15)
     return fig
 
-def create_volume_chart(calls_df, puts_df, spot, pct=0.03):
+def create_volume_chart(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     fig = go.Figure()
     if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
-        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=500); return fig
     rng = spot*pct
     cv = calls_df[(calls_df["strikePrice"]>=spot-rng)&(calls_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["volume"].sum().reset_index(); cv.columns=["strike","c"]
     pv = puts_df[(puts_df["strikePrice"]>=spot-rng)&(puts_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["volume"].sum().reset_index(); pv.columns=["strike","p"]
     vol = pd.merge(cv,pv,on="strike",how="outer").fillna(0).sort_values("strike"); vol["net"]=vol["c"]-vol["p"]
-    if len(vol)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    if len(vol)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=500); return fig
+    dtick = 5 if ticker in ("SPX","NDX") else 1
     colors = ["dodgerblue" if v>=0 else CS["orange"] for v in vol["net"]]
     fig.add_trace(go.Bar(y=vol["strike"],x=vol["net"],orientation="h",marker_color=colors,opacity=0.85))
-    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot ${spot:.2f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
+    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot {spot:.0f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
     fig.update_layout(template="plotly_dark",title=dict(text="Net Volume by Strike (C-P)",font=dict(color=CS["text"],size=12)),
         paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],font=dict(color=CS["text"],size=9),
         xaxis=dict(gridcolor=CS["grid"],title="Net Vol",zeroline=True,zerolinecolor=CS["text"]),
-        yaxis=dict(gridcolor=CS["grid"],tickformat="$,.0f",dtick=5),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=400,bargap=0.15)
+        yaxis=dict(gridcolor=CS["grid"],tickformat=".0f",dtick=dtick),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=500,bargap=0.15)
     return fig
 
 # ── Session State ──
@@ -469,9 +471,9 @@ if snap is not None:
         pf = create_price_chart(st.session_state.ticker, gex_levels=snap.get("levels"), spot=snap["spot"],
             stored_price_df=sp if isinstance(sp, pd.DataFrame) else None)
         st.plotly_chart(pf, width="stretch", theme=None, key="price_chart")
-        st.plotly_chart(create_positions_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"]),
+        st.plotly_chart(create_positions_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"],st.session_state.ticker),
             width="stretch", theme=None, key="pos_chart")
-        st.plotly_chart(create_volume_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"]),
+        st.plotly_chart(create_volume_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"],st.session_state.ticker),
             width="stretch", theme=None, key="vol_chart")
     with col_g:
         st.plotly_chart(snap["fig1"], width="stretch", theme=None, key="gex_chart_1")
@@ -485,22 +487,22 @@ if snap is not None:
             lc1,lc2,lc3,lc4 = st.columns(4)
             with lc1:
                 st.markdown("**Gamma / K***")
-                for k,l,f in [("gamma_k_star","K*","${:.2f}"),("gamma_forward_price","Fwd F","${:.2f}"),
-                              ("gamma_zero_gamma","Γ Flip","${:.1f}"),("gamma_max_gamma","Max Γ","${:.1f}")]:
+                for k,l,f in [("gamma_k_star","K*","{:.0f}"),("gamma_forward_price","Fwd F","{:.0f}"),
+                              ("gamma_zero_gamma","Γ Flip","{:.0f}"),("gamma_max_gamma","Max Γ","{:.0f}")]:
                     if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc2:
                 st.markdown("**Walls / Peaks**")
-                for k,l,f in [("gamma_call_wall","Call Wall","${:.1f}"),("gamma_put_wall","Put Wall","${:.1f}"),
-                              ("gamma_sell_peak_1","Sell Peak","${:.0f}"),("gamma_buy_peak_1","Buy Peak","${:.0f}")]:
+                for k,l,f in [("gamma_call_wall","Call Wall","{:.0f}"),("gamma_put_wall","Put Wall","{:.0f}"),
+                              ("gamma_sell_peak_1","Sell Peak","{:.0f}"),("gamma_buy_peak_1","Buy Peak","{:.0f}")]:
                     if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc3:
                 st.markdown("**Charm**")
                 for k,l,f in [("charm_call_charm_exp","Call Exp","{:,.0f}"),("charm_put_charm_exp","Put Exp","{:,.0f}"),
-                              ("charm_net_charm_exp","Net Exp","{:,.0f}"),("charm_max_charm_strike","Max Strike","${:.1f}")]:
+                              ("charm_net_charm_exp","Net Exp","{:,.0f}"),("charm_max_charm_strike","Max Strike","{:.0f}")]:
                     if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc4:
                 st.markdown("**Pressure / VEX**")
-                for k,l,f in [("pressure_max_pressure_strike","Max P","${:.1f}"),("pressure_pressure_eq","Equilibrium","${:.1f}")]:
+                for k,l,f in [("pressure_max_pressure_strike","Max P","{:.0f}"),("pressure_pressure_eq","Equilibrium","{:.0f}")]:
                     if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
                 vx = snap.get("vex_info",{})
                 if vx.get("net_vex") is not None: st.markdown(f"Net VEX: **{vx['net_vex']:+,.0f}**")
@@ -512,7 +514,7 @@ if snap is not None:
         dc1,dc2,dc3,dc4 = st.columns(4)
         dc1.metric("Strikes",di.get("unique_strikes","?")); dc2.metric("Calls",di.get("total_calls","?"))
         dc3.metric("Puts",di.get("total_puts","?")); sp_list=di.get("strike_spacings",[])
-        dc4.metric("Spacing",", ".join(f"${s}" for s in sp_list) if sp_list else "?")
+        dc4.metric("Spacing",", ".join(f"{s}" for s in sp_list) if sp_list else "?")
         if isinstance(dt_tbl, pd.DataFrame) and not dt_tbl.empty:
             st.dataframe(dt_tbl, width="stretch", height=400)
 

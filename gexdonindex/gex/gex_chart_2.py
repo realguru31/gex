@@ -83,14 +83,14 @@ def generate_charm_chart(data, percent_range=0.03):
     fig.add_trace(go.Scatter(x=st, y=nc, name="Net Charm", line=dict(color=CS["gold"], width=3), opacity=0.9))
     fig.add_trace(go.Scatter(x=st, y=tc, name="Total |Charm|", line=dict(color=CS["orange"], width=2), opacity=0.7))
     fig.add_vline(x=spot, line=dict(color=CS["cyan"], width=2, dash="dash"),
-                  annotation_text=f"Spot ${spot:.2f}", annotation_font_color=CS["cyan"])
+                  annotation_text=f"Spot {spot:.0f}", annotation_font_color=CS["cyan"])
 
     fig.update_layout(
         template="plotly_dark",
         title=dict(text=title, font=dict(color=CS["text"], size=13)),
         paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
         font=dict(color=CS["text"], size=10),
-        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat="$,.0f"),
+        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat=".0f"),
         yaxis=dict(gridcolor=CS["grid"], title="Charm (|val|)"),
         legend=dict(bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
                     font=dict(size=10, color="#ffffff")),

@@ -124,7 +124,7 @@ def generate_pressure_chart(data, percent_range=0.03):
         title=dict(text=title, font=dict(color=CS["text"], size=13)),
         paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
         font=dict(color=CS["text"], size=10),
-        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat="$,.0f"),
+        xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat=".0f"),
         legend=dict(bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
                     font=dict(size=10, color="#ffffff")),
         margin=dict(l=50, r=50, t=40, b=40),
