@@ -336,8 +336,9 @@ def create_volume_chart(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
 def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     """
     Combined OI + Volume chart — vertical bars, strike on X-axis.
-    Call OI/Vol go UP, Put OI/Vol go DOWN. Volume overlaid as brighter bars.
-    Aligned to same strike axis as GEX/Charm charts above.
+    Side-by-side bars per strike (grouped, not overlaid).
+    Call OI (faded lime) + Call Vol (dodgerblue) go UP.
+    Put OI (faded orange) + Put Vol (magenta) go DOWN.
     """
     fig = go.Figure()
     if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
@@ -345,16 +346,11 @@ def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
         return fig
 
     rng = spot * pct
-
-    # Call OI and Volume
     c_oi = calls_df[(calls_df["strikePrice"] >= spot-rng) & (calls_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["openInterest"].sum()
     c_vol = calls_df[(calls_df["strikePrice"] >= spot-rng) & (calls_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["volume"].sum()
-
-    # Put OI and Volume
     p_oi = puts_df[(puts_df["strikePrice"] >= spot-rng) & (puts_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["openInterest"].sum()
     p_vol = puts_df[(puts_df["strikePrice"] >= spot-rng) & (puts_df["strikePrice"] <= spot+rng)].groupby("strikePrice")["volume"].sum()
 
-    # Align all to same strike index
     all_strikes = sorted(set(c_oi.index) | set(c_vol.index) | set(p_oi.index) | set(p_vol.index))
     if len(all_strikes) < 1:
         fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=300)
@@ -365,25 +361,25 @@ def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     p_oi = p_oi.reindex(all_strikes, fill_value=0)
     p_vol = p_vol.reindex(all_strikes, fill_value=0)
 
-    # Call OI (faded blue, UP)
+    # Call OI (faded lime green, UP)
     fig.add_trace(go.Bar(
         x=all_strikes, y=c_oi.values, name="Call OI",
-        marker_color="rgba(30,144,255,0.3)", width=3 if ticker in ("SPX","NDX") else 0.7,
+        marker_color="rgba(0,255,100,0.25)",
     ))
-    # Call Volume (bright blue, UP, overlaid)
+    # Call Volume (dodgerblue, UP)
     fig.add_trace(go.Bar(
         x=all_strikes, y=c_vol.values, name="Call Vol",
-        marker_color="rgba(30,144,255,0.85)", width=3 if ticker in ("SPX","NDX") else 0.7,
+        marker_color="rgba(30,144,255,0.85)",
     ))
-    # Put OI (faded orange, DOWN — negative)
+    # Put OI (faded orange, DOWN)
     fig.add_trace(go.Bar(
         x=all_strikes, y=-p_oi.values, name="Put OI",
-        marker_color="rgba(255,140,0,0.3)", width=3 if ticker in ("SPX","NDX") else 0.7,
+        marker_color="rgba(255,140,0,0.25)",
     ))
-    # Put Volume (bright orange, DOWN — negative, overlaid)
+    # Put Volume (magenta, DOWN)
     fig.add_trace(go.Bar(
         x=all_strikes, y=-p_vol.values, name="Put Vol",
-        marker_color="rgba(255,140,0,0.85)", width=3 if ticker in ("SPX","NDX") else 0.7,
+        marker_color="rgba(255,0,255,0.85)",
     ))
 
     # Spot vertical line
@@ -398,22 +394,23 @@ def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
 
     fig.update_layout(
         template="plotly_dark",
-        title=dict(text="Positioning: OI (faded) + Volume (bright) — Calls ▲ Puts ▼",
+        title=dict(text="Positioning — OI (faded) vs Volume (bright) · Calls ▲ Puts ▼",
                    font=dict(color=CS["text"], size=12)),
         paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
         font=dict(color=CS["text"], size=9),
         xaxis=dict(gridcolor=CS["grid"], title="Strike", tickformat=".0f"),
         yaxis=dict(gridcolor=CS["grid"], title="Contracts", zeroline=True,
                    zerolinecolor=CS["text"], zerolinewidth=1),
-        barmode="overlay",
+        barmode="group",
         legend=dict(
             bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
-            font=dict(size=10, color="#ffffff"),
-            orientation="v", yanchor="top", y=0.98, xanchor="right", x=0.99,
+            font=dict(size=9, color="#ffffff"),
+            orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
         ),
-        margin=dict(l=50, r=10, t=35, b=30),
+        margin=dict(l=50, r=10, t=45, b=30),
         height=300,
-        bargap=0.05,
+        bargap=0.1,
+        bargroupgap=0.0,
     )
     return fig
 
