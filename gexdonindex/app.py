@@ -1,12 +1,8 @@
 """
 GEXdon Index — Real-time GEX Dashboard for SPY, QQQ, SPX, NDX
-Real-time GEX Dashboard for SPY, QQQ, SPX, NDX.
 """
-import os
-import sys
-import time
-import shutil
-import pickle
+import os, sys, time, shutil, pickle, math
+import json as json_mod
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -22,894 +18,549 @@ from config import (
     NYSE_TZ, MARKET_OPEN, MARKET_CLOSE,
     SNAPSHOT_INTERVAL_MIN, AUTO_REFRESH_SEC,
     TICKERS, TICKER_DISPLAY, STRIKE_RANGES, STRIKE_RANGE_LABELS,
-    DTE_OPTIONS, DTE_LABELS, PERIOD_LABELS,
-    CS, SNAPSHOT_DIR,
+    DTE_OPTIONS, DTE_LABELS, PERIOD_LABELS, CS, SNAPSHOT_DIR,
 )
-from gex.gex_utils import fetch_options_data, fetch_price_data, build_diagnostic_table
+from gex.gex_utils import fetch_options_data, fetch_price_data, build_diagnostic_table, compute_net_vex
 from gex.gex_chart_1 import generate_gex_chart
 from gex.gex_chart_2 import generate_charm_chart
 from gex.gex_chart_3 import generate_pressure_chart
 
+st.set_page_config(page_title="GEXdon Index", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
-# ─────────────────────────────────────
-# Page config
-# ─────────────────────────────────────
-st.set_page_config(
-    page_title="GEXdon Index", page_icon="📊",
-    layout="wide", initial_sidebar_state="expanded",
-)
-
-
-# ─────────────────────────────────────
-# Inject dark blue theme
-# ─────────────────────────────────────
 def load_css():
-    css_path = os.path.join(APP_DIR, "theme", "dark_blue.css")
-    if os.path.exists(css_path):
-        with open(css_path) as f:
+    p = os.path.join(APP_DIR, "theme", "dark_blue.css")
+    if os.path.exists(p):
+        with open(p) as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
 load_css()
 
-
-# ─────────────────────────────────────
-# NYSE Time Utilities
-# ─────────────────────────────────────
-def now_et():
-    return datetime.now(NYSE_TZ)
-
+# ── Time Utilities ──
+def now_et(): return datetime.now(NYSE_TZ)
 def is_market_hours(dt_et=None):
-    if dt_et is None:
-        dt_et = now_et()
+    if dt_et is None: dt_et = now_et()
     t = dt_et.time()
     return dt_et.weekday() < 5 and MARKET_OPEN <= t <= MARKET_CLOSE
-
 def current_bucket(dt_et=None):
-    if dt_et is None:
-        dt_et = now_et()
+    if dt_et is None: dt_et = now_et()
     minute = (dt_et.minute // SNAPSHOT_INTERVAL_MIN) * SNAPSHOT_INTERVAL_MIN
     return dt_et.replace(minute=minute, second=0, microsecond=0)
-
 def hhmm_to_period_label(hhmm_str):
-    """Convert HHMM string to Market Profile period label like 'A (09:30)'."""
     letter = PERIOD_LABELS.get(hhmm_str, "?")
-    h, m = hhmm_str[:2], hhmm_str[2:]
-    return f"{letter} ({h}:{m})"
+    return f"{letter} ({hhmm_str[:2]}:{hhmm_str[2:]})"
 
+ALL_PERIODS = [
+    ("0930","A"),("1000","B"),("1030","C"),("1100","D"),("1130","E"),
+    ("1200","F"),("1230","G"),("1300","H"),("1330","I"),("1400","J"),
+    ("1430","K"),("1500","L"),("1530","M"),("1600","N"),
+]
 
-# ─────────────────────────────────────
-# Snapshot Engine
-# ─────────────────────────────────────
+# ── Snapshot Engine (JSON) ──
 def snapshot_dir(ticker, date_str=None):
-    if date_str is None:
-        date_str = now_et().strftime("%Y-%m-%d")
-    path = os.path.join(APP_DIR, SNAPSHOT_DIR, ticker.replace("^", "_"), date_str)
-    try:
-        os.makedirs(path, exist_ok=True)
-    except OSError:
-        pass  # Read-only filesystem (Streamlit Cloud) — directory may already exist from repo
+    if date_str is None: date_str = now_et().strftime("%Y-%m-%d")
+    path = os.path.join(APP_DIR, SNAPSHOT_DIR, ticker.replace("^","_"), date_str)
+    try: os.makedirs(path, exist_ok=True)
+    except OSError: pass
     return path
-
 def snapshot_filename(bucket_time):
-    if isinstance(bucket_time, datetime):
-        return bucket_time.strftime("%H%M") + ".json"
-    return bucket_time.strftime("%H%M") + ".json"
+    return (bucket_time.strftime("%H%M") if isinstance(bucket_time, datetime) else str(bucket_time)) + ".json"
 
-
-def _snap_to_json(snapshot_data):
-    """Convert snapshot to JSON-serializable dict."""
-    import plotly
+def _snap_to_json(snap):
     out = {}
-    for k, v in snapshot_data.items():
+    for k, v in snap.items():
         if isinstance(v, pd.DataFrame):
-            out[k] = {"__df__": True, "data": v.to_dict(orient="list")}
+            d = v.copy()
+            if not isinstance(d.index, pd.RangeIndex): d = d.reset_index()
+            out[k] = {"__df__": True, "data": d.to_dict(orient="list")}
         elif hasattr(v, "to_plotly_json"):
-            # Plotly Figure
             out[k] = {"__plotly__": True, "data": v.to_plotly_json()}
-        elif isinstance(v, (np.integer,)):
-            out[k] = int(v)
-        elif isinstance(v, (np.floating,)):
-            out[k] = float(v)
-        elif isinstance(v, np.ndarray):
-            out[k] = v.tolist()
-        else:
-            out[k] = v
+        elif isinstance(v, (np.integer,)): out[k] = int(v)
+        elif isinstance(v, (np.floating,)): out[k] = float(v)
+        elif isinstance(v, np.ndarray): out[k] = v.tolist()
+        else: out[k] = v
     return out
 
-
 def _snap_from_json(raw):
-    """Restore snapshot from JSON dict."""
     out = {}
     for k, v in raw.items():
         if isinstance(v, dict) and v.get("__df__"):
             df = pd.DataFrame(v["data"])
-            # Restore datetime index for price_data
             if k == "price_data" and "datetime" in df.columns:
                 df["datetime"] = pd.to_datetime(df["datetime"])
                 df = df.set_index("datetime")
             out[k] = df
         elif isinstance(v, dict) and v.get("__plotly__"):
             out[k] = go.Figure(v["data"])
-        else:
-            out[k] = v
+        else: out[k] = v
     return out
 
-
-def save_snapshot(ticker, bucket_dt, snapshot_data):
+def save_snapshot(ticker, bucket_dt, snap):
     sdir = snapshot_dir(ticker)
-    fname = snapshot_filename(bucket_dt)
-    fpath = os.path.join(sdir, fname)
-    if os.path.exists(fpath):
-        return False
-    import json
+    fpath = os.path.join(sdir, snapshot_filename(bucket_dt))
+    if os.path.exists(fpath): return False
     with open(fpath, "w") as f:
-        json.dump(_snap_to_json(snapshot_data), f, default=str)
+        json_mod.dump(_snap_to_json(snap), f, default=str)
     return True
 
 def load_snapshot(ticker, bucket_dt, date_str=None):
     sdir = snapshot_dir(ticker, date_str)
-    fname = snapshot_filename(bucket_dt)
-    fpath = os.path.join(sdir, fname)
+    fpath = os.path.join(sdir, snapshot_filename(bucket_dt))
     if not os.path.exists(fpath):
-        # Fallback: try .pkl for old snapshots
-        pkl_path = fpath.replace(".json", ".pkl")
-        if os.path.exists(pkl_path):
+        pkl = fpath.replace(".json", ".pkl")
+        if os.path.exists(pkl):
             try:
-                with open(pkl_path, "rb") as f:
-                    return pickle.load(f)
-            except Exception:
-                return None
+                with open(pkl, "rb") as f: return pickle.load(f)
+            except: return None
         return None
-    import json
     with open(fpath, "r") as f:
-        return _snap_from_json(json.load(f))
+        return _snap_from_json(json_mod.load(f))
 
 def list_snapshots(ticker, date_str=None):
-    """List snapshot HHMM strings for a date, sorted."""
     sdir = snapshot_dir(ticker, date_str)
-    if not os.path.exists(sdir):
-        return []
-    files = sorted([f for f in os.listdir(sdir) if f.endswith((".json", ".pkl"))])
-    return [f.replace(".json", "").replace(".pkl", "") for f in files]
+    if not os.path.exists(sdir): return []
+    files = sorted([f for f in os.listdir(sdir) if f.endswith((".json",".pkl"))])
+    return [f.replace(".json","").replace(".pkl","") for f in files]
 
 def delete_all_snapshots(ticker):
-    """Delete all snapshot directories for a ticker."""
-    base = os.path.join(APP_DIR, SNAPSHOT_DIR, ticker.replace("^", "_"))
-    if os.path.exists(base):
-        shutil.rmtree(base)
-        return True
+    base = os.path.join(APP_DIR, SNAPSHOT_DIR, ticker.replace("^","_"))
+    if os.path.exists(base): shutil.rmtree(base); return True
     return False
 
+# ── Regime Assessment ──
+REGIME_TABLE = {
+    ("spike","positive"):  ("Dealer buying cushions the fall",          "dodgerblue"),
+    ("spike","negative"):  ("Dealer selling amplifies the fall",        "magenta"),
+    ("crush","positive"):  ("Mild selling, controlled drift down",      "magenta"),
+    ("crush","negative"):  ("Sharp relief rally (dealers buy)",         "dodgerblue"),
+    ("neutral","positive"):("Balanced — positive VEX stabilizing",      CS["gold"]),
+    ("neutral","negative"):("Balanced — negative VEX, watch for moves", CS["gold"]),
+    ("neutral","transition"):("Spot near VEX flip — watch for acceleration", CS["gold"]),
+    ("spike","transition"):("IV spike near VEX flip — high volatility",  CS["gold"]),
+    ("crush","transition"):("IV crush near VEX flip — sharp move likely", CS["gold"]),
+}
 
-# ─────────────────────────────────────
-# Compute GEX Snapshot
-# ─────────────────────────────────────
+def _vex_zone(snap):
+    vex = snap.get("vex_info",{})
+    net = vex.get("net_vex",0); flip = vex.get("vex_flip"); spot = snap.get("spot",0)
+    if flip and abs(spot - flip) < spot * 0.003: return "transition"
+    return "positive" if net > 0 else "negative"
+
+def assess_regime_model1(snap, view_date=None):
+    vex = snap.get("vex_info"); 
+    if not vex or not vex.get("atm_iv"): return None
+    atm_iv = vex["atm_iv"]
+    date_str = view_date or now_et().strftime("%Y-%m-%d")
+    open_snap = load_snapshot(snap.get("ticker","SPX"), datetime.combine(datetime.today(), dtime(9,30)), date_str=date_str)
+    if not open_snap: return None
+    open_iv = (open_snap.get("vex_info") or {}).get("atm_iv")
+    if not open_iv or open_iv <= 0: return None
+    et = now_et()
+    close_t = datetime.combine(et.date(), dtime(16,0), tzinfo=NYSE_TZ)
+    open_t = datetime.combine(et.date(), dtime(9,30), tzinfo=NYSE_TZ)
+    try:
+        snap_et = datetime.fromisoformat(snap.get("timestamp",""))
+        if snap_et.tzinfo is None: snap_et = NYSE_TZ.localize(snap_et)
+    except: snap_et = et
+    t_open = max(0.01, (close_t - open_t).total_seconds()/3600)
+    t_now = max(0.01, (close_t - snap_et).total_seconds()/3600)
+    expected = open_iv * math.sqrt(t_now / t_open)
+    ratio = atm_iv / expected if expected > 0 else 1
+    iv_state = "spike" if ratio > 1.10 else "crush" if ratio < 0.90 else "neutral"
+    zone = _vex_zone(snap)
+    beh, col = REGIME_TABLE.get((iv_state, zone), ("Unknown", CS["gold"]))
+    return {"model":"Model 1 (Theta Decay)","iv_state":iv_state,"vex_zone":zone,"behavior":beh,"color":col,
+            "atm_iv":atm_iv,"open_iv":open_iv,"expected_iv":expected,"net_vex":vex.get("net_vex",0)}
+
+def assess_regime_model2(snap, prev_snap=None):
+    vex = snap.get("vex_info")
+    if not vex or not vex.get("atm_iv"): return None
+    atm_iv = vex["atm_iv"]
+    prev_iv = (prev_snap.get("vex_info") or {}).get("atm_iv") if prev_snap else None
+    if prev_iv and prev_iv > 0:
+        ratio = atm_iv / prev_iv
+        iv_state = "spike" if ratio > 1.10 else "crush" if ratio < 0.90 else "neutral"
+    else: iv_state = "neutral"
+    zone = _vex_zone(snap)
+    beh, col = REGIME_TABLE.get((iv_state, zone), ("Unknown", CS["gold"]))
+    return {"model":"Model 2 (Periodic)","iv_state":iv_state,"vex_zone":zone,"behavior":beh,"color":col,
+            "atm_iv":atm_iv,"prev_iv":prev_iv,"net_vex":vex.get("net_vex",0)}
+
+# ── Compute GEX Snapshot ──
 @st.cache_data(ttl=60, show_spinner=False)
 def compute_gex_snapshot(ticker, percent_range, max_dte):
-    """Fetch live data (multi-DTE) and compute all three charts + levels."""
     data = fetch_options_data(ticker, max_dte=max_dte)
-    if data is None:
-        return None
-
-    fig1, levels1 = generate_gex_chart(data, percent_range)
-    fig2, levels2 = generate_charm_chart(data, percent_range)
-    fig3, levels3 = generate_pressure_chart(data, percent_range)
-
+    if data is None: return None
+    fig1, lv1 = generate_gex_chart(data, percent_range)
+    fig2, lv2 = generate_charm_chart(data, percent_range)
+    fig3, lv3 = generate_pressure_chart(data, percent_range)
     all_levels = {}
-    all_levels.update({f"gamma_{k}": v for k, v in levels1.items()})
-    all_levels.update({f"charm_{k}": v for k, v in levels2.items()})
-    all_levels.update({f"pressure_{k}": v for k, v in levels3.items()})
-
-    # Build diagnostic table
+    all_levels.update({f"gamma_{k}":v for k,v in lv1.items()})
+    all_levels.update({f"charm_{k}":v for k,v in lv2.items()})
+    all_levels.update({f"pressure_{k}":v for k,v in lv3.items()})
     diag_table = build_diagnostic_table(data, percent_range)
-    diag_info = data.get("diagnostics", {})
-
-    # Fetch price data for snapshot storage
+    vex_info = compute_net_vex(data, percent_range)
     price_df = fetch_price_data(ticker, n_bars=200)
-
     return {
-        "timestamp": now_et().isoformat(),
-        "ticker": ticker,
-        "percent_range": percent_range,
-        "max_dte": max_dte,
-        "spot": data["spot"],
-        "expiry": data["expiry"],
+        "timestamp": now_et().isoformat(), "ticker": ticker,
+        "percent_range": percent_range, "max_dte": max_dte,
+        "spot": data["spot"], "expiry": data["expiry"],
         "expiry_label": data["expiry_label"],
-        "iv_coverage": data["iv_coverage"],
-        "fallback_iv": data["fallback_iv"],
-        "source": data.get("source", "barchart"),
-        "fetched_expiries": data.get("fetched_expiries", []),
-        "fig1": fig1, "fig2": fig2, "fig3": fig3,
-        "levels": all_levels,
-        # Store OI data for positions chart
-        "calls": data["calls"],
-        "puts": data["puts"],
-        # Store price data for historical candlestick chart
+        "iv_coverage": data["iv_coverage"], "fallback_iv": data["fallback_iv"],
+        "source": data.get("source","barchart"),
+        "fetched_expiries": data.get("fetched_expiries",[]),
+        "fig1": fig1, "fig2": fig2, "fig3": fig3, "levels": all_levels,
+        "calls": data["calls"], "puts": data["puts"],
         "price_data": price_df if price_df is not None and not price_df.empty else None,
-        # Diagnostics
-        "diag_table": diag_table,
-        "diag_info": diag_info,
+        "vex_info": vex_info,
+        "diag_table": diag_table, "diag_info": data.get("diagnostics",{}),
     }
 
-
-# ─────────────────────────────────────
-# Candlestick Price Chart (Plotly)
-# ─────────────────────────────────────
+# ── Price Chart ──
 def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None):
-    """Plotly candlestick: dodgerblue up, magenta down. RTH only (9:30-16:00 ET).
-    If stored_price_df is provided (from snapshot), use it instead of fetching live."""
-    if stored_price_df is not None and not stored_price_df.empty:
-        price_df = stored_price_df.copy()
-    else:
-        price_df = fetch_price_data(ticker, n_bars=200)
-
+    price_df = stored_price_df.copy() if stored_price_df is not None and not stored_price_df.empty else fetch_price_data(ticker, n_bars=200)
     fig = go.Figure()
-
     if price_df.empty:
-        fig.add_annotation(text="No price data\n(tvdatafeed unavailable)",
-                           xref="paper", yref="paper", x=0.5, y=0.5,
-                           showarrow=False, font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=600, margin=dict(l=20, r=20, t=30, b=20))
+        fig.add_annotation(text="No price data", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False, font=dict(color=CS["text"], size=14))
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
         return fig
-
-    # Ensure we have a DatetimeIndex (JSON snapshots may have datetime as column)
     if not isinstance(price_df.index, pd.DatetimeIndex):
-        for col_name in ["datetime", "date", "time", "index"]:
-            if col_name in price_df.columns:
-                price_df[col_name] = pd.to_datetime(price_df[col_name])
-                price_df = price_df.set_index(col_name)
-                break
-
-    # Rename columns if needed (JSON may lose capitalization)
-    col_map = {c.lower(): c for c in ["Open", "High", "Low", "Close", "Volume"]}
-    price_df = price_df.rename(columns={k: v for k, v in col_map.items() if k in price_df.columns and v not in price_df.columns})
-
-    # Convert index to ET timezone
+        for cn in ["datetime","date","time","index"]:
+            if cn in price_df.columns:
+                price_df[cn] = pd.to_datetime(price_df[cn]); price_df = price_df.set_index(cn); break
+    cm = {c.lower():c for c in ["Open","High","Low","Close","Volume"]}
+    price_df = price_df.rename(columns={k:v for k,v in cm.items() if k in price_df.columns and v not in price_df.columns})
     if isinstance(price_df.index, pd.DatetimeIndex):
         if price_df.index.tz is None:
-            try:
-                price_df.index = price_df.index.tz_localize("UTC")
-            except Exception:
-                pass
-        try:
-            price_df.index = price_df.index.tz_convert(NYSE_TZ)
-        except Exception:
-            pass
+            try: price_df.index = price_df.index.tz_localize("UTC")
+            except: pass
+        try: price_df.index = price_df.index.tz_convert(NYSE_TZ)
+        except: pass
     else:
-        # Still not a DatetimeIndex — can't filter by time
-        fig.add_annotation(text="Price data: invalid index",
-                           xref="paper", yref="paper", x=0.5, y=0.5,
-                           showarrow=False, font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=600, margin=dict(l=20, r=20, t=30, b=20))
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
         return fig
-
-    # Get today's date in ET (or last available trading day)
     today_et = now_et().date()
-    available_dates = sorted(set(price_df.index.date))
-    if today_et in available_dates:
-        target_date = today_et
-    elif available_dates:
-        target_date = available_dates[-1]
-    else:
-        target_date = today_et
-
-    # Filter to target date only
-    day_df = price_df[price_df.index.date == target_date].copy()
-
-    # Filter RTH: 9:30 to 16:00
-    rth_start = dtime(9, 30)
-    rth_end = dtime(16, 0)
-    rth_df = day_df[(day_df.index.time >= rth_start) & (day_df.index.time <= rth_end)]
-
-    # If no RTH data yet (premarket only), show premarket
-    if rth_df.empty:
-        rth_df = day_df
-
-    if rth_df.empty:
-        fig.add_annotation(text="No RTH data available",
-                           xref="paper", yref="paper", x=0.5, y=0.5,
-                           showarrow=False, font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=600, margin=dict(l=20, r=20, t=30, b=20))
+    avail = sorted(set(price_df.index.date))
+    target = today_et if today_et in avail else (avail[-1] if avail else today_et)
+    day_df = price_df[price_df.index.date == target]
+    rth = day_df[(day_df.index.time >= dtime(9,30)) & (day_df.index.time <= dtime(16,0))]
+    if rth.empty: rth = day_df
+    if rth.empty:
+        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], height=750)
         return fig
-
-    # Format as HH:MM strings
-    time_labels = [t.strftime("%H:%M") for t in rth_df.index]
-
-    # Generate FULL RTH timeline (09:30 to 16:00 in 5-min slots)
-    full_rth_labels = []
-    h, m = 9, 30
-    while (h < 16) or (h == 16 and m == 0):
-        full_rth_labels.append(f"{h:02d}:{m:02d}")
-        m += 5
-        if m >= 60:
-            m = 0
-            h += 1
-
-    fig.add_trace(go.Candlestick(
-        x=time_labels,
-        open=rth_df["Open"], high=rth_df["High"],
-        low=rth_df["Low"], close=rth_df["Close"],
-        increasing=dict(line=dict(color="dodgerblue"), fillcolor="dodgerblue"),
-        decreasing=dict(line=dict(color="magenta"), fillcolor="magenta"),
-        name="Price",
-    ))
-
-    # Spot line
+    tl = [t.strftime("%H:%M") for t in rth.index]
+    full = []; h,m = 9,30
+    while h < 16 or (h==16 and m==0): full.append(f"{h:02d}:{m:02d}"); m+=5; h,m = (h+1,0) if m>=60 else (h,m)
+    fig.add_trace(go.Candlestick(x=tl, open=rth["Open"], high=rth["High"], low=rth["Low"], close=rth["Close"],
+        increasing=dict(line=dict(color="dodgerblue"),fillcolor="dodgerblue"),
+        decreasing=dict(line=dict(color="magenta"),fillcolor="magenta"), name="Price"))
     if spot:
-        fig.add_hline(y=spot, line=dict(color=CS["cyan"], width=1.5),
-                      annotation_text=f"${spot:.2f}",
-                      annotation_font_color=CS["cyan"],
-                      annotation_position="right")
-
-    # Key GEX levels overlay
+        fig.add_hline(y=spot, line=dict(color=CS["cyan"],width=1.5), annotation_text=f"${spot:.2f}",
+                      annotation_font_color=CS["cyan"], annotation_position="right")
     if gex_levels:
-        level_styles = {
-            "gamma_k_star":              ("K*",              "magenta",    "dot"),
-            "gamma_forward_price":       ("Fwd F",           "#ffffff",    "dashdot"),
-            "gamma_max_gamma":           ("Max Γ",           CS["gold"],   "solid"),
-            "gamma_zero_gamma":          ("Gamma Flip",      "darkgoldenrod", "dash"),
-            "gamma_call_wall":           ("Call Wall",        CS["green"],  "dot"),
-            "gamma_put_wall":            ("Put Wall",         CS["red"],    "dot"),
-            "pressure_pressure_eq":      ("P.Eq",             CS["purple"], "dash"),
-            "charm_max_charm_strike":    ("Max Charm",        CS["orange"], "dot"),
-            "pressure_max_pressure_strike": ("Max Pressure",  "#e040fb",    "dashdot"),
-            "pressure_max_accel_strike":    ("Max Acceleration","#76ff03",   "dashdot"),
-        }
-        for key, (label, color, dash) in level_styles.items():
+        ls = {"gamma_k_star":("K*","magenta","dot"),"gamma_forward_price":("Fwd F","#ffffff","dashdot"),
+              "gamma_max_gamma":("Max Γ",CS["gold"],"solid"),"gamma_zero_gamma":("Γ Flip","darkgoldenrod","dash"),
+              "gamma_call_wall":("Call Wall",CS["green"],"dot"),"gamma_put_wall":("Put Wall",CS["red"],"dot"),
+              "pressure_pressure_eq":("P.Eq",CS["purple"],"dash"),"charm_max_charm_strike":("Max Charm",CS["orange"],"dot"),
+              "pressure_max_pressure_strike":("Max P","#e040fb","dashdot"),"pressure_max_accel_strike":("Accel","#76ff03","dashdot")}
+        for key,(lbl,clr,dsh) in ls.items():
             if key in gex_levels:
-                val = gex_levels[key]
-                fig.add_hline(y=val, line=dict(color=color, width=1.2, dash=dash),
-                              annotation_text=f"{label} ${val:.0f}",
-                              annotation_font_color=color,
-                              annotation_font_size=9,
-                              annotation_position="left")
-
-    display_ticker = TICKER_DISPLAY.get(ticker, ticker)
-    fig.update_layout(
-        template="plotly_dark",
-        title=dict(text=f"{display_ticker} RTH", font=dict(color=CS["text"], size=13)),
-        paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-        font=dict(color=CS["text"], size=10),
-        xaxis=dict(gridcolor=CS["grid"], rangeslider_visible=False,
-                   categoryorder="array", categoryarray=full_rth_labels,
-                   range=[-0.5, len(full_rth_labels) - 0.5],
-                   nticks=14),
+                v = gex_levels[key]
+                fig.add_hline(y=v, line=dict(color=clr,width=1.2,dash=dsh), annotation_text=f"{lbl} ${v:.0f}",
+                              annotation_font_color=clr, annotation_font_size=9, annotation_position="left")
+    dt = TICKER_DISPLAY.get(ticker, ticker)
+    fig.update_layout(template="plotly_dark", title=dict(text=f"{dt} RTH", font=dict(color=CS["text"],size=13)),
+        paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"], font=dict(color=CS["text"],size=10),
+        xaxis=dict(gridcolor=CS["grid"], rangeslider_visible=False, categoryorder="array", categoryarray=full,
+                   range=[-0.5,len(full)-0.5], nticks=14),
         yaxis=dict(gridcolor=CS["grid"], title="Price", tickformat="$,.2f"),
-        margin=dict(l=60, r=10, t=35, b=30),
-        height=600,
-        showlegend=False,
-    )
+        margin=dict(l=60,r=10,t=35,b=30), height=750, showlegend=False)
     return fig
 
-
-# ─────────────────────────────────────
-# Positions by Strike Chart (Plotly)
-# ─────────────────────────────────────
-def create_positions_chart(calls_df, puts_df, spot, percent_range=0.03):
-    """
-    Net OI by Strike — horizontal bar chart.
-    Net OI = Call OI - Put OI at each strike.
-    Positive (right/blue) = more call OI. Negative (left/orange) = more put OI.
-    Useful for spotting iron condors (symmetric OI at wings).
-    """
+# ── Net OI / Volume Charts ──
+def create_positions_chart(calls_df, puts_df, spot, pct=0.03):
     fig = go.Figure()
-
     if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
-        fig.add_annotation(text="No OI data", xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False,
-                           font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=350, margin=dict(l=20, r=20, t=30, b=20))
-        return fig
-
-    rng = spot * percent_range
-
-    call_oi = calls_df[
-        (calls_df["strikePrice"] >= spot - rng) &
-        (calls_df["strikePrice"] <= spot + rng)
-    ].groupby("strikePrice")["openInterest"].sum().reset_index()
-    call_oi.columns = ["strike", "call_oi"]
-
-    put_oi = puts_df[
-        (puts_df["strikePrice"] >= spot - rng) &
-        (puts_df["strikePrice"] <= spot + rng)
-    ].groupby("strikePrice")["openInterest"].sum().reset_index()
-    put_oi.columns = ["strike", "put_oi"]
-
-    oi = pd.merge(call_oi, put_oi, on="strike", how="outer").fillna(0)
-    oi = oi.sort_values("strike")
-    oi["net_oi"] = oi["call_oi"] - oi["put_oi"]
-
-    if len(oi) < 1:
-        fig.add_annotation(text="No OI in range", xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False,
-                           font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=350, margin=dict(l=20, r=20, t=30, b=20))
-        return fig
-
-    strikes = oi["strike"].values
-    net = oi["net_oi"].values.astype(float)
-
-    # Color: blue for positive (call-heavy), orange for negative (put-heavy)
-    colors = ["dodgerblue" if v >= 0 else CS["orange"] for v in net]
-
-    fig.add_trace(go.Bar(
-        y=strikes, x=net, orientation="h",
-        name="Net OI", marker_color=colors, opacity=0.85,
-    ))
-
-    fig.add_hline(y=spot, line=dict(color=CS["gold"], width=3),
-                  annotation_text=f"Spot ${spot:.2f}",
-                  annotation_font_color=CS["gold"],
-                  annotation_font_size=10,
-                  annotation_position="top right")
-
-    fig.update_layout(
-        template="plotly_dark",
-        title=dict(text="Net OI by Strike (C-P)", font=dict(color=CS["text"], size=12)),
-        paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-        font=dict(color=CS["text"], size=9),
-        xaxis=dict(gridcolor=CS["grid"], title="Net OI (Call - Put)",
-                   zeroline=True, zerolinecolor=CS["text"], zerolinewidth=1),
-        yaxis=dict(gridcolor=CS["grid"], title="", tickformat="$,.0f", dtick=5),
-        showlegend=False,
-        margin=dict(l=55, r=10, t=35, b=25),
-        height=350,
-        bargap=0.15,
-    )
+        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    rng = spot*pct
+    co = calls_df[(calls_df["strikePrice"]>=spot-rng)&(calls_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["openInterest"].sum().reset_index(); co.columns=["strike","c"]
+    po = puts_df[(puts_df["strikePrice"]>=spot-rng)&(puts_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["openInterest"].sum().reset_index(); po.columns=["strike","p"]
+    oi = pd.merge(co,po,on="strike",how="outer").fillna(0).sort_values("strike"); oi["net"]=oi["c"]-oi["p"]
+    if len(oi)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    colors = ["dodgerblue" if v>=0 else CS["orange"] for v in oi["net"]]
+    fig.add_trace(go.Bar(y=oi["strike"],x=oi["net"],orientation="h",marker_color=colors,opacity=0.85))
+    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot ${spot:.2f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
+    fig.update_layout(template="plotly_dark",title=dict(text="Net OI by Strike (C-P)",font=dict(color=CS["text"],size=12)),
+        paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],font=dict(color=CS["text"],size=9),
+        xaxis=dict(gridcolor=CS["grid"],title="Net OI",zeroline=True,zerolinecolor=CS["text"]),
+        yaxis=dict(gridcolor=CS["grid"],tickformat="$,.0f",dtick=5),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=400,bargap=0.15)
     return fig
 
-
-def create_volume_chart(calls_df, puts_df, spot, percent_range=0.03):
-    """
-    Net Volume by Strike — horizontal bar chart.
-    Net Vol = Call Vol - Put Vol at each strike.
-    Same layout as Net OI chart for easy comparison.
-    """
+def create_volume_chart(calls_df, puts_df, spot, pct=0.03):
     fig = go.Figure()
-
     if calls_df is None or puts_df is None or calls_df.empty or puts_df.empty:
-        fig.add_annotation(text="No volume data", xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False,
-                           font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=350, margin=dict(l=20, r=20, t=30, b=20))
-        return fig
-
-    rng = spot * percent_range
-
-    call_vol = calls_df[
-        (calls_df["strikePrice"] >= spot - rng) &
-        (calls_df["strikePrice"] <= spot + rng)
-    ].groupby("strikePrice")["volume"].sum().reset_index()
-    call_vol.columns = ["strike", "call_vol"]
-
-    put_vol = puts_df[
-        (puts_df["strikePrice"] >= spot - rng) &
-        (puts_df["strikePrice"] <= spot + rng)
-    ].groupby("strikePrice")["volume"].sum().reset_index()
-    put_vol.columns = ["strike", "put_vol"]
-
-    vol = pd.merge(call_vol, put_vol, on="strike", how="outer").fillna(0)
-    vol = vol.sort_values("strike")
-    vol["net_vol"] = vol["call_vol"] - vol["put_vol"]
-
-    if len(vol) < 1:
-        fig.add_annotation(text="No volume in range", xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False,
-                           font=dict(color=CS["text"], size=14))
-        fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                          height=350, margin=dict(l=20, r=20, t=30, b=20))
-        return fig
-
-    strikes = vol["strike"].values
-    net = vol["net_vol"].values.astype(float)
-
-    colors = ["dodgerblue" if v >= 0 else CS["orange"] for v in net]
-
-    fig.add_trace(go.Bar(
-        y=strikes, x=net, orientation="h",
-        name="Net Vol", marker_color=colors, opacity=0.85,
-    ))
-
-    fig.add_hline(y=spot, line=dict(color=CS["gold"], width=3),
-                  annotation_text=f"Spot ${spot:.2f}",
-                  annotation_font_color=CS["gold"],
-                  annotation_font_size=10,
-                  annotation_position="top right")
-
-    fig.update_layout(
-        template="plotly_dark",
-        title=dict(text="Net Volume by Strike (C-P)", font=dict(color=CS["text"], size=12)),
-        paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-        font=dict(color=CS["text"], size=9),
-        xaxis=dict(gridcolor=CS["grid"], title="Net Vol (Call - Put)",
-                   zeroline=True, zerolinecolor=CS["text"], zerolinewidth=1),
-        yaxis=dict(gridcolor=CS["grid"], title="", tickformat="$,.0f", dtick=5),
-        showlegend=False,
-        margin=dict(l=55, r=10, t=35, b=25),
-        height=350,
-        bargap=0.15,
-    )
+        fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    rng = spot*pct
+    cv = calls_df[(calls_df["strikePrice"]>=spot-rng)&(calls_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["volume"].sum().reset_index(); cv.columns=["strike","c"]
+    pv = puts_df[(puts_df["strikePrice"]>=spot-rng)&(puts_df["strikePrice"]<=spot+rng)].groupby("strikePrice")["volume"].sum().reset_index(); pv.columns=["strike","p"]
+    vol = pd.merge(cv,pv,on="strike",how="outer").fillna(0).sort_values("strike"); vol["net"]=vol["c"]-vol["p"]
+    if len(vol)<1: fig.update_layout(paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],height=400); return fig
+    colors = ["dodgerblue" if v>=0 else CS["orange"] for v in vol["net"]]
+    fig.add_trace(go.Bar(y=vol["strike"],x=vol["net"],orientation="h",marker_color=colors,opacity=0.85))
+    fig.add_hline(y=spot,line=dict(color=CS["gold"],width=3),annotation_text=f"Spot ${spot:.2f}",annotation_font_color=CS["gold"],annotation_font_size=10,annotation_position="top right")
+    fig.update_layout(template="plotly_dark",title=dict(text="Net Volume by Strike (C-P)",font=dict(color=CS["text"],size=12)),
+        paper_bgcolor=CS["bg"],plot_bgcolor=CS["plot_bg"],font=dict(color=CS["text"],size=9),
+        xaxis=dict(gridcolor=CS["grid"],title="Net Vol",zeroline=True,zerolinecolor=CS["text"]),
+        yaxis=dict(gridcolor=CS["grid"],tickformat="$,.0f",dtick=5),showlegend=False,margin=dict(l=55,r=10,t=35,b=25),height=400,bargap=0.15)
     return fig
 
-
-# ─────────────────────────────────────
-# Session State
-# ─────────────────────────────────────
+# ── Session State ──
 def init_state():
-    defaults = {
-        "ticker": "SPX",
-        "strike_range": 0.03,
-        "max_dte": 0,
-        "slider_time": None,
-        "last_refresh": 0,
-        "last_auto_refresh": 0,
-        "live_snapshot": None,
-        "viewing_mode": "live",
-        "view_date": None,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
+    for k,v in {"ticker":"SPX","strike_range":0.03,"max_dte":0,"selected_period":"LIVE",
+                 "last_refresh":0,"last_auto_refresh":0,"live_snapshot":None,"view_date":None}.items():
+        if k not in st.session_state: st.session_state[k] = v
 init_state()
 
-
-# ─────────────────────────────────────
-# Sidebar
-# ─────────────────────────────────────
+# ── Sidebar ──
 with st.sidebar:
-    st.markdown("## ⚡ GEXdon Index")
-    st.markdown("---")
-
-    # Ticker (no ^SPX)
-    ticker = st.selectbox(
-        "Ticker", TICKERS,
-        format_func=lambda x: TICKER_DISPLAY.get(x, x),
-        index=TICKERS.index(st.session_state.ticker),
-        key="ticker_select",
-    )
+    st.markdown("## ⚡ GEXdon Index"); st.markdown("---")
+    ticker = st.selectbox("Ticker", TICKERS, format_func=lambda x: TICKER_DISPLAY.get(x,x),
+        index=TICKERS.index(st.session_state.ticker), key="ticker_select")
     if ticker != st.session_state.ticker:
-        st.session_state.ticker = ticker
-        st.session_state.live_snapshot = None
-        st.session_state.slider_time = None
-
-    # Strike range
-    strike_range = st.selectbox(
-        "Strike Range", STRIKE_RANGES,
-        format_func=lambda x: STRIKE_RANGE_LABELS[x],
-        index=STRIKE_RANGES.index(st.session_state.strike_range),
-        key="range_select",
-    )
-    if strike_range != st.session_state.strike_range:
-        st.session_state.strike_range = strike_range
-        st.session_state.live_snapshot = None
-
-    # DTE selector
-    max_dte = st.selectbox(
-        "DTE Range", DTE_OPTIONS,
-        format_func=lambda x: DTE_LABELS[x],
-        index=DTE_OPTIONS.index(st.session_state.max_dte),
-        key="dte_select",
-    )
-    if max_dte != st.session_state.max_dte:
-        st.session_state.max_dte = max_dte
-        st.session_state.live_snapshot = None
-
+        st.session_state.ticker = ticker; st.session_state.live_snapshot = None; st.session_state.selected_period = "LIVE"
+    sr = st.selectbox("Strike Range", STRIKE_RANGES, format_func=lambda x: STRIKE_RANGE_LABELS[x],
+        index=STRIKE_RANGES.index(st.session_state.strike_range), key="range_select")
+    if sr != st.session_state.strike_range: st.session_state.strike_range = sr; st.session_state.live_snapshot = None
+    md = st.selectbox("DTE Range", DTE_OPTIONS, format_func=lambda x: DTE_LABELS[x],
+        index=DTE_OPTIONS.index(st.session_state.max_dte), key="dte_select")
+    if md != st.session_state.max_dte: st.session_state.max_dte = md; st.session_state.live_snapshot = None
     st.markdown("---")
-
-    # Refresh
     if st.button("🔄 Refresh Now", use_container_width=True):
-        compute_gex_snapshot.clear()
-        st.session_state.live_snapshot = None
-        st.session_state.last_refresh = time.time()
-
-    # Status
+        compute_gex_snapshot.clear(); st.session_state.live_snapshot = None; st.session_state.last_refresh = time.time()
     et = now_et()
-    market_status = "🟢 MARKET OPEN" if is_market_hours(et) else "🔴 MARKET CLOSED"
-    st.markdown(f"**{market_status}**")
+    st.markdown(f"**{'🟢 MARKET OPEN' if is_market_hours(et) else '🔴 MARKET CLOSED'}**")
     st.markdown(f"**ET:** {et.strftime('%H:%M:%S')}")
-
-    # Snapshots info
-    st.markdown("---")
-    st.markdown("### 📁 Snapshots")
-
-    # List available dates for this ticker
-    ticker_snap_dir = os.path.join(APP_DIR, SNAPSHOT_DIR, st.session_state.ticker)
-    available_dates = []
-    if os.path.exists(ticker_snap_dir):
-        available_dates = sorted([
-            d for d in os.listdir(ticker_snap_dir)
-            if os.path.isdir(os.path.join(ticker_snap_dir, d))
-            and any(f.endswith((".json", ".pkl")) for f in os.listdir(os.path.join(ticker_snap_dir, d)))
-        ], reverse=True)
-
+    st.markdown("---"); st.markdown("### 📁 Snapshots")
+    tsd = os.path.join(APP_DIR, SNAPSHOT_DIR, st.session_state.ticker)
+    avd = []
+    if os.path.exists(tsd):
+        avd = sorted([d for d in os.listdir(tsd) if os.path.isdir(os.path.join(tsd,d))
+            and any(f.endswith((".json",".pkl")) for f in os.listdir(os.path.join(tsd,d)))], reverse=True)
     today_str = now_et().strftime("%Y-%m-%d")
-
-    if available_dates:
-        # Date selector — show today first, then historical
-        date_options = available_dates
-        if today_str not in date_options:
-            date_options = [today_str] + date_options
-        selected_date = st.selectbox(
-            "📅 Date",
-            date_options,
-            index=0,
-            key="snapshot_date",
-            format_func=lambda d: f"{d} (today)" if d == today_str else d,
-        )
-        st.session_state.view_date = selected_date
-
-        snaps_hhmm = list_snapshots(st.session_state.ticker, selected_date)
-        if snaps_hhmm:
-            st.markdown(f"{len(snaps_hhmm)} snapshots on {selected_date}")
-        else:
-            st.markdown(f"No snapshots on {selected_date}")
+    if avd:
+        do = avd if today_str in avd else [today_str]+avd
+        sd = st.selectbox("📅 Date", do, index=0, key="snapshot_date",
+            format_func=lambda d: f"{d} (today)" if d==today_str else d)
+        st.session_state.view_date = sd
+        sh = list_snapshots(st.session_state.ticker, sd)
+        st.markdown(f"{len(sh)} snapshots" if sh else "No snapshots")
     else:
         st.session_state.view_date = today_str
-        snaps_hhmm = list_snapshots(st.session_state.ticker)
-        if snaps_hhmm:
-            st.markdown(f"{len(snaps_hhmm)} snapshots today")
-        else:
-            st.markdown("No snapshots yet")
-
-    # Delete all snapshots button
+        st.markdown("No snapshots yet")
     if st.button("🗑️ Delete All Snapshots", use_container_width=True):
-        deleted = delete_all_snapshots(st.session_state.ticker)
-        if deleted:
-            st.toast(f"🗑️ All snapshots deleted for {st.session_state.ticker}")
-            st.session_state.slider_time = None
-            st.rerun()
-        else:
-            st.toast("No snapshots to delete")
+        if delete_all_snapshots(st.session_state.ticker):
+            st.session_state.selected_period = "LIVE"; st.rerun()
+    if is_market_hours(et) and time.time()-st.session_state.last_auto_refresh > AUTO_REFRESH_SEC:
+        st.session_state.last_auto_refresh = time.time(); compute_gex_snapshot.clear(); st.session_state.live_snapshot = None
 
-    # Auto-refresh
-    if is_market_hours(et):
-        elapsed = time.time() - st.session_state.last_auto_refresh
-        if elapsed > AUTO_REFRESH_SEC:
-            st.session_state.last_auto_refresh = time.time()
-            compute_gex_snapshot.clear()
-            st.session_state.live_snapshot = None
-
-
-# ─────────────────────────────────────
-# Compute Live Data
-# ─────────────────────────────────────
+# ── Compute Live ──
 def compute_live():
     with st.spinner("Fetching options data..."):
-        snap = compute_gex_snapshot(
-            st.session_state.ticker,
-            st.session_state.strike_range,
-            st.session_state.max_dte,
-        )
-    if snap is None:
-        st.error("❌ Failed to fetch options data. Source may be unavailable.")
-        return None
-
+        snap = compute_gex_snapshot(st.session_state.ticker, st.session_state.strike_range, st.session_state.max_dte)
+    if snap is None: st.error("❌ Failed to fetch options data."); return None
     st.session_state.live_snapshot = snap
-
-    # Auto-save snapshot during market hours
     if is_market_hours():
         bucket = current_bucket()
-        saved = save_snapshot(st.session_state.ticker, bucket, snap)
-        if saved:
-            hhmm = bucket.strftime("%H%M")
-            label = hhmm_to_period_label(hhmm)
-            st.toast(f"💾 Snapshot saved: {label}")
-
+        if save_snapshot(st.session_state.ticker, bucket, snap):
+            st.toast(f"💾 Snapshot saved: {hhmm_to_period_label(bucket.strftime('%H%M'))}")
     return snap
 
-
-# ─────────────────────────────────────
-# Main Layout
-# ─────────────────────────────────────
+# ══════════════════════════════════════
+# MAIN LAYOUT
+# ══════════════════════════════════════
 st.markdown("# 📊 GEXdon Index")
-
 snap = st.session_state.live_snapshot
-if snap is None:
-    snap = compute_live()
+if snap is None: snap = compute_live()
 
 if snap is not None:
-    # Header metrics
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Ticker", TICKER_DISPLAY.get(snap["ticker"], snap["ticker"]))
+    # Header
+    c1,c2,c3,c4,c5 = st.columns(5)
+    c1.metric("Ticker", TICKER_DISPLAY.get(snap["ticker"],snap["ticker"]))
     c2.metric("Spot", f"${snap['spot']:.2f}")
-    # Show expiry label + fetched dates
-    fetched_exps = snap.get("fetched_expiries", [])
-    if fetched_exps:
-        exp_display = ", ".join(fetched_exps)
-    else:
-        exp_display = snap["expiry_label"]
     c3.metric("Expiry", snap["expiry_label"])
     c4.metric("IV Coverage", f"{snap['iv_coverage']:.0f}%")
-    c5.metric("Range", STRIKE_RANGE_LABELS.get(snap["percent_range"], "3%"))
-    if fetched_exps:
-        st.caption(f"📅 Chains: {exp_display}")
+    c5.metric("Range", STRIKE_RANGE_LABELS.get(snap["percent_range"],"3%"))
+    fe = snap.get("fetched_expiries",[])
+    if fe: st.caption(f"📅 Chains: {', '.join(fe)}")
 
-    # Time slider with Market Profile period labels (A, B, C...)
-    view_date = getattr(st.session_state, 'view_date', None) or now_et().strftime("%Y-%m-%d")
+    # ── Period Buttons ──
+    view_date = st.session_state.view_date or today_str
     snaps_hhmm = list_snapshots(st.session_state.ticker, view_date)
-    if snaps_hhmm:
-        st.markdown("---")
-        is_today = (view_date == now_et().strftime("%Y-%m-%d"))
-        period_options = (["LIVE"] if is_today else []) + [hhmm_to_period_label(h) for h in snaps_hhmm]
-        default_value = "LIVE" if is_today else period_options[-1] if period_options else "LIVE"
-
-        selected = st.select_slider(
-            "⏱ Period",
-            options=period_options,
-            value=default_value,
-            key="time_slider",
-        )
-
-        if selected != "LIVE":
-            # Parse back: "A (09:30)" → "0930"
-            if is_today:
-                idx = period_options.index(selected) - 1  # -1 for LIVE offset
-            else:
-                idx = period_options.index(selected)
-            hhmm = snaps_hhmm[idx]
-            h, m = int(hhmm[:2]), int(hhmm[2:])
-            target_dt = datetime.combine(datetime.today(), dtime(h, m))
-            hist_snap = load_snapshot(st.session_state.ticker, target_dt, date_str=view_date)
-            if hist_snap:
-                snap = hist_snap
-                date_label = f" ({view_date})" if not is_today else ""
-                st.info(f"📷 Viewing snapshot: {selected}{date_label}")
-
-    # Two-column layout
+    avail_set = set(snaps_hhmm)
+    is_today = (view_date == now_et().strftime("%Y-%m-%d"))
     st.markdown("---")
-    col_price, col_gex = st.columns([0.32, 0.68])
+    bcols = st.columns(len(ALL_PERIODS)+1)
+    with bcols[0]:
+        if is_today:
+            if st.button("LIVE", key="btn_live", use_container_width=True,
+                         type="primary" if st.session_state.selected_period=="LIVE" else "secondary"):
+                st.session_state.selected_period = "LIVE"; st.rerun()
+        else: st.button("LIVE", key="btn_live", disabled=True, use_container_width=True)
+    for i,(hhmm,letter) in enumerate(ALL_PERIODS):
+        with bcols[i+1]:
+            has = hhmm in avail_set; sel = st.session_state.selected_period==hhmm
+            if has:
+                if st.button(letter, key=f"btn_{hhmm}", use_container_width=True,
+                             type="primary" if sel else "secondary"):
+                    st.session_state.selected_period = hhmm; st.rerun()
+            else: st.button(letter, key=f"btn_{hhmm}", disabled=True, use_container_width=True)
 
-    with col_price:
-        # Candlestick price chart — use stored data from snapshot if available
-        stored_price = snap.get("price_data")
-        price_fig = create_price_chart(
-            st.session_state.ticker,
-            gex_levels=snap.get("levels"),
-            spot=snap["spot"],
-            stored_price_df=stored_price if isinstance(stored_price, pd.DataFrame) else None,
-        )
-        st.plotly_chart(price_fig, width="stretch", theme=None, key="price_chart")
+    # Load snapshot
+    if st.session_state.selected_period != "LIVE":
+        hhmm = st.session_state.selected_period
+        h,m = int(hhmm[:2]),int(hhmm[2:])
+        hs = load_snapshot(st.session_state.ticker, datetime.combine(datetime.today(),dtime(h,m)), date_str=view_date)
+        if hs:
+            snap = hs; ltr = PERIOD_LABELS.get(hhmm,"?")
+            dl = f" ({view_date})" if not is_today else ""
+            st.info(f"📷 Viewing: {ltr} ({hhmm[:2]}:{hhmm[2:]}){dl}")
 
-        # Net OI by Strike chart
-        pos_fig = create_positions_chart(
-            snap.get("calls"), snap.get("puts"),
-            snap["spot"], snap["percent_range"],
-        )
-        st.plotly_chart(pos_fig, width="stretch", theme=None, key="pos_chart")
+    # ── Regime Banner ──
+    vex = snap.get("vex_info")
+    if vex:
+        prev_snap = None
+        cur = st.session_state.selected_period if st.session_state.selected_period != "LIVE" else None
+        if cur and cur in snaps_hhmm:
+            idx = snaps_hhmm.index(cur)
+            if idx > 0:
+                ph = snaps_hhmm[idx-1]
+                prev_snap = load_snapshot(st.session_state.ticker, datetime.combine(datetime.today(),dtime(int(ph[:2]),int(ph[2:]))), date_str=view_date)
+        m1 = assess_regime_model1(snap, view_date)
+        m2 = assess_regime_model2(snap, prev_snap)
+        st.markdown("---")
+        rc1,rc2 = st.columns(2)
+        with rc1:
+            if m1:
+                il = m1["iv_state"].upper(); vl = "+VEX" if m1["vex_zone"]=="positive" else "-VEX" if m1["vex_zone"]=="negative" else "Transition"
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m1["color"]}33;background:{m1["color"]}11">'
+                    f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 1 (Theta Decay)</span><br>'
+                    f'<span style="color:{m1["color"]};font-size:14px;font-weight:bold">IV {il} · {vl} · {m1["behavior"]}</span><br>'
+                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m1["atm_iv"]*100:.1f}% | Open: {m1["open_iv"]*100:.1f}% | Expected: {m1["expected_iv"]*100:.1f}% | VEX: {m1["net_vex"]:+,.0f}</span></div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {CS["grid"]};background:{CS["plot_bg"]}">'
+                    f'<span style="color:{CS["text"]};font-size:12px">Model 1 (Theta Decay): Needs opening snapshot (A period)</span></div>', unsafe_allow_html=True)
+        with rc2:
+            if m2:
+                il = m2["iv_state"].upper(); vl = "+VEX" if m2["vex_zone"]=="positive" else "-VEX" if m2["vex_zone"]=="negative" else "Transition"
+                piv = f" | Prev: {m2['prev_iv']*100:.1f}%" if m2.get("prev_iv") else ""
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m2["color"]}33;background:{m2["color"]}11">'
+                    f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 2 (Periodic)</span><br>'
+                    f'<span style="color:{m2["color"]};font-size:14px;font-weight:bold">IV {il} · {vl} · {m2["behavior"]}</span><br>'
+                    f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m2["atm_iv"]*100:.1f}%{piv} | VEX: {m2["net_vex"]:+,.0f}</span></div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {CS["grid"]};background:{CS["plot_bg"]}">'
+                    f'<span style="color:{CS["text"]};font-size:12px">Model 2 (Periodic): Needs previous snapshot</span></div>', unsafe_allow_html=True)
 
-        # Net Volume by Strike chart
-        vol_fig = create_volume_chart(
-            snap.get("calls"), snap.get("puts"),
-            snap["spot"], snap["percent_range"],
-        )
-        st.plotly_chart(vol_fig, width="stretch", theme=None, key="vol_chart")
-
-    with col_gex:
-        # Chart 1: Gamma Density
+    # ── Charts (40/60 split) ──
+    st.markdown("---")
+    col_p, col_g = st.columns([0.40, 0.60])
+    with col_p:
+        sp = snap.get("price_data")
+        pf = create_price_chart(st.session_state.ticker, gex_levels=snap.get("levels"), spot=snap["spot"],
+            stored_price_df=sp if isinstance(sp, pd.DataFrame) else None)
+        st.plotly_chart(pf, width="stretch", theme=None, key="price_chart")
+        st.plotly_chart(create_positions_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"]),
+            width="stretch", theme=None, key="pos_chart")
+        st.plotly_chart(create_volume_chart(snap.get("calls"),snap.get("puts"),snap["spot"],snap["percent_range"]),
+            width="stretch", theme=None, key="vol_chart")
+    with col_g:
         st.plotly_chart(snap["fig1"], width="stretch", theme=None, key="gex_chart_1")
-        # Chart 2: Charm Density
         st.plotly_chart(snap["fig2"], width="stretch", theme=None, key="gex_chart_2")
-        # Chart 3: Charm Pressure & Acceleration
         st.plotly_chart(snap["fig3"], width="stretch", theme=None, key="gex_chart_3")
 
-    # Key Levels Summary
-    levels = snap.get("levels", {})
+    # ── Key Levels ──
+    levels = snap.get("levels",{})
     if levels:
         with st.expander("📐 Key GEX Levels", expanded=False):
-            lc1, lc2, lc3, lc4 = st.columns(4)
+            lc1,lc2,lc3,lc4 = st.columns(4)
             with lc1:
                 st.markdown("**Gamma / K***")
-                if "gamma_k_star" in levels:
-                    st.markdown(f"K* (Optimal): **${levels['gamma_k_star']:.2f}**")
-                if "gamma_forward_price" in levels:
-                    st.markdown(f"Forward F: **${levels['gamma_forward_price']:.2f}**")
-                if "gamma_zero_gamma" in levels:
-                    st.markdown(f"Gamma Flip: **${levels['gamma_zero_gamma']:.1f}**")
-                if "gamma_max_gamma" in levels:
-                    st.markdown(f"Max Γ: **${levels['gamma_max_gamma']:.1f}**")
+                for k,l,f in [("gamma_k_star","K*","${:.2f}"),("gamma_forward_price","Fwd F","${:.2f}"),
+                              ("gamma_zero_gamma","Γ Flip","${:.1f}"),("gamma_max_gamma","Max Γ","${:.1f}")]:
+                    if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc2:
                 st.markdown("**Walls / Peaks**")
-                if "gamma_call_wall" in levels:
-                    st.markdown(f"Call Wall: **${levels['gamma_call_wall']:.1f}**")
-                if "gamma_put_wall" in levels:
-                    st.markdown(f"Put Wall: **${levels['gamma_put_wall']:.1f}**")
-                if "gamma_sell_peak_1" in levels:
-                    st.markdown(f"Sell Peak: **${levels['gamma_sell_peak_1']:.0f}**")
-                if "gamma_buy_peak_1" in levels:
-                    st.markdown(f"Buy Peak: **${levels['gamma_buy_peak_1']:.0f}**")
+                for k,l,f in [("gamma_call_wall","Call Wall","${:.1f}"),("gamma_put_wall","Put Wall","${:.1f}"),
+                              ("gamma_sell_peak_1","Sell Peak","${:.0f}"),("gamma_buy_peak_1","Buy Peak","${:.0f}")]:
+                    if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc3:
                 st.markdown("**Charm**")
-                if "charm_call_charm_exp" in levels:
-                    st.markdown(f"Call Exp: **{levels['charm_call_charm_exp']:,.0f}**")
-                if "charm_put_charm_exp" in levels:
-                    st.markdown(f"Put Exp: **{levels['charm_put_charm_exp']:,.0f}**")
-                if "charm_net_charm_exp" in levels:
-                    st.markdown(f"Net Exp: **{levels['charm_net_charm_exp']:,.0f}**")
-                if "charm_max_charm_strike" in levels:
-                    st.markdown(f"Max Strike: **${levels['charm_max_charm_strike']:.1f}**")
+                for k,l,f in [("charm_call_charm_exp","Call Exp","{:,.0f}"),("charm_put_charm_exp","Put Exp","{:,.0f}"),
+                              ("charm_net_charm_exp","Net Exp","{:,.0f}"),("charm_max_charm_strike","Max Strike","${:.1f}")]:
+                    if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
             with lc4:
-                st.markdown("**Pressure**")
-                if "pressure_max_pressure_strike" in levels:
-                    st.markdown(f"Max P: **${levels['pressure_max_pressure_strike']:.1f}**")
-                if "pressure_max_accel_strike" in levels:
-                    st.markdown(f"Max Accel: **${levels['pressure_max_accel_strike']:.1f}**")
-                if "pressure_pressure_eq" in levels:
-                    st.markdown(f"Equilibrium: **${levels['pressure_pressure_eq']:.1f}**")
+                st.markdown("**Pressure / VEX**")
+                for k,l,f in [("pressure_max_pressure_strike","Max P","${:.1f}"),("pressure_pressure_eq","Equilibrium","${:.1f}")]:
+                    if k in levels: st.markdown(f"{l}: **{f.format(levels[k])}**")
+                vx = snap.get("vex_info",{})
+                if vx.get("net_vex") is not None: st.markdown(f"Net VEX: **{vx['net_vex']:+,.0f}**")
+                if vx.get("vex_flip") is not None: st.markdown(f"VEX Flip: **${vx['vex_flip']:.1f}**")
 
-    # Diagnostic Data
+    # ── Diagnostics ──
     with st.expander("🔬 Raw Diagnostic Data", expanded=False):
-        diag_info = snap.get("diag_info", {})
-        diag_table = snap.get("diag_table", pd.DataFrame())
+        di = snap.get("diag_info",{}); dt_tbl = snap.get("diag_table",pd.DataFrame())
+        dc1,dc2,dc3,dc4 = st.columns(4)
+        dc1.metric("Strikes",di.get("unique_strikes","?")); dc2.metric("Calls",di.get("total_calls","?"))
+        dc3.metric("Puts",di.get("total_puts","?")); sp_list=di.get("strike_spacings",[])
+        dc4.metric("Spacing",", ".join(f"${s}" for s in sp_list) if sp_list else "?")
+        if isinstance(dt_tbl, pd.DataFrame) and not dt_tbl.empty:
+            st.dataframe(dt_tbl, width="stretch", height=400)
 
-        # Chain stats
-        dc1, dc2, dc3, dc4 = st.columns(4)
-        dc1.metric("Unique Strikes", diag_info.get("unique_strikes", "?"))
-        dc2.metric("Call Rows", diag_info.get("total_calls", "?"))
-        dc3.metric("Put Rows", diag_info.get("total_puts", "?"))
-        spacings = diag_info.get("strike_spacings", [])
-        dc4.metric("Strike Spacing", ", ".join(f"${s}" for s in spacings) if spacings else "?")
-
-        dc5, dc6, dc7, dc8 = st.columns(4)
-        dc5.metric("Strike Min", f"${diag_info.get('strike_min', 0):.0f}")
-        dc6.metric("Strike Max", f"${diag_info.get('strike_max', 0):.0f}")
-        exps = diag_info.get("fetched_expiries", [])
-        dc7.metric("Expiries Fetched", len(exps))
-        dc8.metric("Columns", len(diag_info.get("columns_found", [])))
-
-        if exps:
-            st.markdown(f"**Expiry dates:** {', '.join(exps)}")
-
-        cols_found = diag_info.get("columns_found", [])
-        if cols_found:
-            st.markdown(f"**Columns:** {', '.join(cols_found)}")
-
-        st.markdown("---")
-
-        # Per-strike GEX/Charm table
-        if not diag_table.empty:
-            st.markdown("**Per-Strike GEX & Charm** (within range)")
-            st.dataframe(
-                diag_table.style.format({
-                    "Strike": "${:.0f}",
-                    "C_IV": "{:.1f}%", "P_IV": "{:.1f}%",
-                    "C_GEX": "{:,.0f}", "P_GEX": "{:,.0f}", "Net_GEX": "{:,.0f}",
-                    "BC_Gamma_C": "{:,.0f}", "BC_Gamma_P": "{:,.0f}",
-                    "C_Charm": "{:,.0f}", "P_Charm": "{:,.0f}", "Net_Charm": "{:,.0f}",
-                }),
-                width="stretch",
-                height=400,
-            )
-            st.caption(
-                "C_OI/P_OI = Open Interest | C_IV/P_IV = Implied Vol (%) | "
-                "C_GEX/P_GEX = BS Gamma × OI × 100 | BC_Gamma = Source pre-computed gamma × OI × 100 | "
-                "C_Charm/P_Charm = BS Charm × OI × 100 | Net = Calls - Puts (GEX) or Calls + Puts (Charm) | "
-                "Expiries = # expiry chains at this strike"
-            )
-        else:
-            st.info("No diagnostic data available")
-
-        # Raw chain sample
-        st.markdown("---")
-        st.markdown("**Raw Call Chain (first 20 rows)**")
-        raw_calls = snap.get("calls")
-        if raw_calls is not None and not raw_calls.empty:
-            st.dataframe(raw_calls.head(20), width="stretch", height=300)
-        else:
-            st.info("No call data")
-
-        st.markdown("**Raw Put Chain (first 20 rows)**")
-        raw_puts = snap.get("puts")
-        if raw_puts is not None and not raw_puts.empty:
-            st.dataframe(raw_puts.head(20), width="stretch", height=300)
-        else:
-            st.info("No put data")
-
+    # ── TradingView Lightweight Charts ──
+    with st.expander("📈 TradingView Chart (Experimental)", expanded=False):
+        spd = snap.get("price_data"); tvl = snap.get("levels",{}); sv = snap.get("spot",0)
+        if isinstance(spd, pd.DataFrame) and not spd.empty:
+            pdf = spd.copy()
+            if not isinstance(pdf.index, pd.DatetimeIndex):
+                for cn in ["datetime","date","time","index"]:
+                    if cn in pdf.columns: pdf[cn]=pd.to_datetime(pdf[cn]); pdf=pdf.set_index(cn); break
+            cm = {c.lower():c for c in ["Open","High","Low","Close"]}
+            pdf = pdf.rename(columns={k:v for k,v in cm.items() if k in pdf.columns and v not in pdf.columns})
+            if isinstance(pdf.index, pd.DatetimeIndex):
+                if pdf.index.tz is None:
+                    try: pdf.index=pdf.index.tz_localize("UTC")
+                    except: pass
+                try: pdf.index=pdf.index.tz_convert(NYSE_TZ)
+                except: pass
+                rth=pdf[(pdf.index.time>=dtime(9,30))&(pdf.index.time<=dtime(16,0))]
+                if rth.empty: rth=pdf
+                cd=[{"time":int(ts.timestamp()),"open":float(r.get("Open",0)),"high":float(r.get("High",0)),
+                     "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in rth.iterrows()]
+                pls=""
+                for key,(lbl,clr) in {"gamma_k_star":("K*","magenta"),"gamma_forward_price":("Fwd F","#ffffff"),
+                    "gamma_zero_gamma":("Γ Flip","darkgoldenrod"),"gamma_call_wall":("Call Wall","#00ff88"),
+                    "gamma_put_wall":("Put Wall","#ff4757"),"pressure_pressure_eq":("P.Eq","#a855f7")}.items():
+                    if key in tvl:
+                        val=float(tvl[key])
+                        pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} ${val:.0f}'}});\n"
+                if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot ${float(sv):.2f}'}});\n"
+                cj=json_mod.dumps(cd)
+                html=f"""<div id="tv-chart" style="width:100%;height:500px"></div>
+                <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+                <script>
+                const chart=LightweightCharts.createChart(document.getElementById('tv-chart'),{{width:document.getElementById('tv-chart').clientWidth,height:500,
+                    layout:{{background:{{type:'solid',color:'#050b1e'}},textColor:'#c8d6e5'}},
+                    grid:{{vertLines:{{color:'#1a3a5c'}},horzLines:{{color:'#1a3a5c'}}}},
+                    crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
+                    rightPriceScale:{{borderColor:'#1a3a5c'}},
+                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false}}}});
+                const series=chart.addCandlestickSeries({{upColor:'#1e90ff',downColor:'#ff00ff',
+                    borderUpColor:'#1e90ff',borderDownColor:'#ff00ff',wickUpColor:'#1e90ff',wickDownColor:'#ff00ff'}});
+                series.setData({cj});{pls}chart.timeScale().fitContent();
+                new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
+                </script>"""
+                st.components.v1.html(html, height=520)
+            else: st.info("Price data not available for TradingView chart")
+        else: st.info("No stored price data — requires snapshot with price data")
 else:
     st.warning("⏳ Waiting for data... Click 🔄 Refresh Now in the sidebar.")
