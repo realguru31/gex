@@ -43,6 +43,93 @@ def bs_greeks(S, K, T, r, sigma, option_type="call"):
     return delta, gamma, charm
 
 
+def bs_vanna(S, K, T, r, sigma):
+    """Compute Vanna = dDelta/dVol = dVega/dSpot. Sign-neutral (same for calls/puts)."""
+    if T <= 0 or sigma <= 0:
+        return 0.0
+    d1 = (log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt(T))
+    d2 = d1 - sigma * sqrt(T)
+    n_d1 = norm.pdf(d1)
+    vanna = -n_d1 * d2 / sigma
+    return vanna
+
+
+def compute_net_vex(data, percent_range=0.03):
+    """
+    Compute Net Vanna Exposure (VEX) at current spot.
+    VEX = sum of (Vanna × OI × contract_mult) across all strikes.
+    Positive VEX: dealers long vanna (stabilizing).
+    Negative VEX: dealers short vanna (destabilizing).
+    Returns dict with net_vex, vex_flip, atm_iv.
+    """
+    spot = data["spot"]
+    calls = data["calls"]
+    puts = data["puts"]
+    fb_iv = data["fallback_iv"]
+    r = RISK_FREE_RATE
+    rng = spot * percent_range
+    contract_mult = 100
+
+    net_vex = 0.0
+    atm_iv_sum, atm_iv_count = 0.0, 0
+
+    # Per-strike VEX for flip detection
+    strike_vex = {}
+
+    for _, row in calls.iterrows():
+        K = row["strikePrice"]
+        if K < spot - rng or K > spot + rng:
+            continue
+        iv = resolve_iv(row.get("iv_decimal", 0), fb_iv)
+        if iv is None or iv <= 0:
+            continue
+        t_exp = row.get("t_expiry", data.get("t_expiry", MIN_T))
+        oi = int(row.get("openInterest", 0))
+        v = bs_vanna(spot, K, t_exp, r, iv)
+        contribution = v * oi * contract_mult
+        net_vex += contribution
+        strike_vex[K] = strike_vex.get(K, 0) + contribution
+        # ATM IV: track calls near spot
+        if abs(K - spot) < spot * 0.005:
+            atm_iv_sum += iv
+            atm_iv_count += 1
+
+    for _, row in puts.iterrows():
+        K = row["strikePrice"]
+        if K < spot - rng or K > spot + rng:
+            continue
+        iv = resolve_iv(row.get("iv_decimal", 0), fb_iv)
+        if iv is None or iv <= 0:
+            continue
+        t_exp = row.get("t_expiry", data.get("t_expiry", MIN_T))
+        oi = int(row.get("openInterest", 0))
+        v = bs_vanna(spot, K, t_exp, r, iv)
+        # Puts: dealer is short the put → short vanna → negate
+        contribution = -v * oi * contract_mult
+        net_vex += contribution
+        strike_vex[K] = strike_vex.get(K, 0) + contribution
+
+    # Find VEX flip (zero crossing)
+    vex_flip = None
+    sorted_strikes = sorted(strike_vex.keys())
+    for i in range(len(sorted_strikes) - 1):
+        k1, k2 = sorted_strikes[i], sorted_strikes[i + 1]
+        v1, v2 = strike_vex[k1], strike_vex[k2]
+        if v1 * v2 < 0 and (v2 - v1) != 0:
+            flip = k1 - v1 * (k2 - k1) / (v2 - v1)
+            if vex_flip is None or abs(flip - spot) < abs(vex_flip - spot):
+                vex_flip = flip
+
+    atm_iv = (atm_iv_sum / atm_iv_count) if atm_iv_count > 0 else None
+
+    return {
+        "net_vex": net_vex,
+        "vex_flip": vex_flip,
+        "atm_iv": atm_iv,
+        "vex_zone": "positive" if net_vex > 0 else "negative",
+    }
+
+
 def resolve_iv(row_iv, fallback_iv):
     if row_iv and row_iv > 0:
         return row_iv

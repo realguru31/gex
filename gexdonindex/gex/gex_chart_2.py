@@ -95,7 +95,7 @@ def generate_charm_chart(data, percent_range=0.03):
         legend=dict(bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
                     font=dict(size=10, color="#ffffff")),
         margin=dict(l=50, r=20, t=40, b=40),
-        height=420,
+        height=510,
     )
     return fig, levels
 
@@ -105,5 +105,5 @@ def _empty(msg):
     fig.add_annotation(text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
                        showarrow=False, font=dict(color=CS["text"], size=16))
     fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                      height=420, margin=dict(l=20, r=20, t=20, b=20))
+                      height=510, margin=dict(l=20, r=20, t=20, b=20))
     return fig

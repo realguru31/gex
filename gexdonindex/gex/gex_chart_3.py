@@ -128,7 +128,7 @@ def generate_pressure_chart(data, percent_range=0.03):
         legend=dict(bgcolor="rgba(13,31,60,0.9)", bordercolor=CS["grid"],
                     font=dict(size=10, color="#ffffff")),
         margin=dict(l=50, r=50, t=40, b=40),
-        height=440,
+        height=520,
     )
     fig.update_yaxes(title=dict(text="Pressure", font=dict(color=CS["purple"])),
                      tickfont=dict(color=CS["purple"]), gridcolor=CS["grid"], secondary_y=False)
@@ -143,5 +143,5 @@ def _empty(msg):
     fig.add_annotation(text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
                        showarrow=False, font=dict(color=CS["text"], size=16))
     fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                      height=440, margin=dict(l=20, r=20, t=20, b=20))
+                      height=520, margin=dict(l=20, r=20, t=20, b=20))
     return fig

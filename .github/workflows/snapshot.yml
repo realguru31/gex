@@ -2,17 +2,13 @@ name: GEXdon Snapshot Worker
 
 on:
   schedule:
-    # Every 15 min during RTH to maximize chance of capturing all 30-min buckets.
-    # GitHub Actions cron can delay/skip runs, so 15-min intervals give 2 chances per bucket.
-    # 14:00-21:00 UTC = 9:00-16:00 ET (covers A through N periods)
-    # Worker deduplicates: if a bucket's snapshot exists, it skips.
-    - cron: '0,15,30,45 14,15,16,17,18,19,20 * * 1-5'
-  workflow_dispatch:  # Allow manual trigger for testing
+    # Every 30 min during RTH: 14:00-21:00 UTC = 9:00-16:00 ET
+    - cron: '0,30 14,15,16,17,18,19,20,21 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    # Skip on US market holidays (best-effort: skip if market closed)
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -39,7 +35,6 @@ jobs:
           git config user.name "GEXdon Bot"
           git config user.email "gexdon-bot@users.noreply.github.com"
           git add data/snapshots/
-          # Only commit if there are changes
           if git diff --cached --quiet; then
             echo "No new snapshots to commit"
           else

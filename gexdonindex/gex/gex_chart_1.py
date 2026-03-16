@@ -348,7 +348,7 @@ def generate_gex_chart(data, percent_range=0.03):
                     orientation="h", yanchor="bottom", y=1.02,
                     xanchor="center", x=0.5),
         margin=dict(l=55, r=55, t=55, b=40),
-        height=440,
+        height=520,
     )
 
     # Left y-axis: always positive gamma
@@ -426,5 +426,5 @@ def _empty(msg):
     fig.add_annotation(text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
                        showarrow=False, font=dict(color=CS["text"], size=16))
     fig.update_layout(paper_bgcolor=CS["bg"], plot_bgcolor=CS["plot_bg"],
-                      height=440, margin=dict(l=20, r=20, t=20, b=20))
+                      height=520, margin=dict(l=20, r=20, t=20, b=20))
     return fig
