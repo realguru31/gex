@@ -216,7 +216,7 @@ def compute_gex_snapshot(ticker, percent_range, max_dte):
     all_levels.update({f"pressure_{k}":v for k,v in lv3.items()})
     diag_table = build_diagnostic_table(data, percent_range)
     vex_info = compute_net_vex(data, percent_range)
-    price_df = fetch_price_data(ticker, n_bars=200)
+    price_df = fetch_price_data(ticker, n_bars=600)
     return {
         "timestamp": now_et().isoformat(), "ticker": ticker,
         "percent_range": percent_range, "max_dte": max_dte,
@@ -234,7 +234,7 @@ def compute_gex_snapshot(ticker, percent_range, max_dte):
 
 # ── Price Chart ──
 def create_price_chart(ticker, gex_levels=None, spot=None, stored_price_df=None):
-    price_df = stored_price_df.copy() if stored_price_df is not None and not stored_price_df.empty else fetch_price_data(ticker, n_bars=200)
+    price_df = stored_price_df.copy() if stored_price_df is not None and not stored_price_df.empty else fetch_price_data(ticker, n_bars=600)
     fig = go.Figure()
     if price_df.empty:
         fig.add_annotation(text="No price data", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False, font=dict(color=CS["text"], size=14))
@@ -662,8 +662,8 @@ if snap is not None:
                     layout:{{background:{{type:'solid',color:'#050b1e'}},textColor:'#c8d6e5'}},
                     grid:{{vertLines:{{color:'#1a3a5c'}},horzLines:{{color:'#1a3a5c'}}}},
                     crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
-                    rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}}}},
-                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false}},
+                    rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}},borderVisible:true,entireTextOnly:true}},
+                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false,rightOffset:20}},
                     handleScroll:{{vertTouchDrag:true}},
                     handleScale:{{axisPressedMouseMove:true,mouseWheel:true,pinch:true}},
                 }});
