@@ -674,7 +674,7 @@ if snap is not None:
                 }});
                 series.setData({cj});
                 {pls}
-                chart.timeScale().fitContent();
+                var dl=series.data().length; chart.timeScale().setVisibleLogicalRange({{from: Math.max(0,dl-200), to: dl+20}});
                 new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
                 </script>"""
                 st.components.v1.html(html, height=620)
