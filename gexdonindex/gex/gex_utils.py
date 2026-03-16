@@ -71,6 +71,8 @@ def compute_net_vex(data, percent_range=0.03):
     contract_mult = 100
 
     net_vex = 0.0
+    gross_call_vex = 0.0
+    gross_put_vex = 0.0
     atm_iv_sum, atm_iv_count = 0.0, 0
 
     # Per-strike VEX for flip detection
@@ -88,6 +90,7 @@ def compute_net_vex(data, percent_range=0.03):
         v = bs_vanna(spot, K, t_exp, r, iv)
         contribution = v * oi * contract_mult
         net_vex += contribution
+        gross_call_vex += abs(contribution)
         strike_vex[K] = strike_vex.get(K, 0) + contribution
         # ATM IV: track calls near spot
         if abs(K - spot) < spot * 0.005:
@@ -107,6 +110,7 @@ def compute_net_vex(data, percent_range=0.03):
         # Puts: dealer is short the put → short vanna → negate
         contribution = -v * oi * contract_mult
         net_vex += contribution
+        gross_put_vex += abs(contribution)
         strike_vex[K] = strike_vex.get(K, 0) + contribution
 
     # Find VEX flip (zero crossing)
@@ -122,11 +126,15 @@ def compute_net_vex(data, percent_range=0.03):
 
     atm_iv = (atm_iv_sum / atm_iv_count) if atm_iv_count > 0 else None
 
+    # VEX percentage: net / gross total
+    gross_total = gross_call_vex + gross_put_vex
+    vex_pct = (net_vex / gross_total * 100) if gross_total > 0 else 0.0
+
     return {
         "net_vex": net_vex,
+        "vex_pct": vex_pct,
         "vex_flip": vex_flip,
         "atm_iv": atm_iv,
-        "vex_zone": "positive" if net_vex > 0 else "negative",
     }
 
 
