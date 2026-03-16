@@ -649,6 +649,32 @@ if snap is not None:
                         val=float(tvl[key])
                         pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} {val:.0f}'}});\n"
                 if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot {float(sv):.0f}'}});\n"
+                # Compute round-number horizontal lines ($100 increments)
+                price_min = min(r.get("Low",0) for _,r in pdf.iterrows() if r.get("Low",0)>0)
+                price_max = max(r.get("High",0) for _,r in pdf.iterrows())
+                round_base = int(price_min // 100) * 100
+                round_lines_js = ""
+                for rl in range(round_base, int(price_max) + 200, 100):
+                    if price_min - 50 < rl < price_max + 50:
+                        round_lines_js += f"series.createPriceLine({{price:{rl},color:'#1a3a5c',lineWidth:1,lineStyle:0,axisLabelVisible:false,title:''}});\n"
+
+                # Find RTH open/close timestamps for markers
+                markers_js = "var markers = [];\n"
+                seen_dates = set()
+                for ts in pdf.index:
+                    d = ts.date()
+                    if d in seen_dates:
+                        continue
+                    # RTH open: 9:30 ET
+                    rth_open = ts.replace(hour=9, minute=30, second=0)
+                    rth_close = ts.replace(hour=16, minute=0, second=0)
+                    if rth_open in pdf.index or any(abs((t - rth_open).total_seconds()) < 300 for t in pdf.index if t.date() == d):
+                        markers_js += f"markers.push({{time:{int(rth_open.timestamp())},position:'belowBar',color:'#00d2ff',shape:'arrowUp',text:'RTH Open'}});\n"
+                    if rth_close in pdf.index or any(abs((t - rth_close).total_seconds()) < 300 for t in pdf.index if t.date() == d):
+                        markers_js += f"markers.push({{time:{int(rth_close.timestamp())},position:'belowBar',color:'#ff8c00',shape:'arrowDown',text:'RTH Close'}});\n"
+                    seen_dates.add(d)
+                markers_js += "if(markers.length>0) series.setMarkers(markers);\n"
+
                 cj=json_mod.dumps(cd)
                 html=f"""
                 <div id="tv-chart" style="width:100%;height:600px;position:relative;">
@@ -660,7 +686,7 @@ if snap is not None:
                     width:document.getElementById('tv-chart').clientWidth,
                     height:600,
                     layout:{{background:{{type:'solid',color:'#050b1e'}},textColor:'#c8d6e5'}},
-                    grid:{{vertLines:{{color:'#1a3a5c'}},horzLines:{{color:'#1a3a5c'}}}},
+                    grid:{{vertLines:{{visible:false}},horzLines:{{visible:false}}}},
                     crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
                     rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}},borderVisible:true,entireTextOnly:true}},
                     timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false,rightOffset:20}},
@@ -673,7 +699,9 @@ if snap is not None:
                     wickUpColor:'#1e90ff',wickDownColor:'#ff00ff',
                 }});
                 series.setData({cj});
+                {round_lines_js}
                 {pls}
+                {markers_js}
                 var dl=series.data().length; chart.timeScale().setVisibleLogicalRange({{from: Math.max(0,dl-200), to: dl+20}});
                 new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
                 </script>"""
