@@ -528,9 +528,9 @@ if snap is not None:
         with rc1:
             if m1:
                 il = m1["iv_state"].upper(); vl = "+VEX" if m1["vex_zone"]=="positive" else "-VEX" if m1["vex_zone"]=="negative" else "Transition"
-                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m1["color"]}33;background:{m1["color"]}11">'
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m1["color"]}33;background:{m1["color"]}22">'
                     f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 1 (Theta Decay)</span><br>'
-                    f'<span style="color:{m1["color"]};font-size:14px;font-weight:bold">IV {il} · {vl} · {m1["behavior"]}</span><br>'
+                    f'<span style="color:{m1["color"]};font-size:14px;font-weight:bold">● IV {il} · {vl} · {m1["behavior"]}</span><br>'
                     f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m1["atm_iv"]*100:.1f}% | Open: {m1["open_iv"]*100:.1f}% | Expected: {m1["expected_iv"]*100:.1f}% | VEX: {m1["net_vex"]:+,.0f}</span></div>',
                     unsafe_allow_html=True)
             else:
@@ -540,9 +540,9 @@ if snap is not None:
             if m2:
                 il = m2["iv_state"].upper(); vl = "+VEX" if m2["vex_zone"]=="positive" else "-VEX" if m2["vex_zone"]=="negative" else "Transition"
                 piv = f" | Prev: {m2['prev_iv']*100:.1f}%" if m2.get("prev_iv") else ""
-                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m2["color"]}33;background:{m2["color"]}11">'
+                st.markdown(f'<div style="padding:10px;border-radius:8px;border:1px solid {m2["color"]}33;background:{m2["color"]}22">'
                     f'<span style="color:{CS["text"]};font-size:12px;font-weight:bold">Model 2 (Periodic)</span><br>'
-                    f'<span style="color:{m2["color"]};font-size:14px;font-weight:bold">IV {il} · {vl} · {m2["behavior"]}</span><br>'
+                    f'<span style="color:{m2["color"]};font-size:14px;font-weight:bold">● IV {il} · {vl} · {m2["behavior"]}</span><br>'
                     f'<span style="color:{CS["text"]};font-size:11px">ATM IV: {m2["atm_iv"]*100:.1f}%{piv} | VEX: {m2["net_vex"]:+,.0f}</span></div>',
                     unsafe_allow_html=True)
             else:
