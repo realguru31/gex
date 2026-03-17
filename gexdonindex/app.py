@@ -364,7 +364,7 @@ def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     # Call OI (faded lime green, UP)
     fig.add_trace(go.Bar(
         x=all_strikes, y=c_oi.values, name="Call OI",
-        marker_color="rgba(0,255,100,0.25)",
+        marker_color="rgba(255,255,255,0.9)",
     ))
     # Call Volume (dodgerblue, UP)
     fig.add_trace(go.Bar(
@@ -374,7 +374,7 @@ def create_oi_volume_combined(calls_df, puts_df, spot, pct=0.03, ticker="SPY"):
     # Put OI (faded orange, DOWN)
     fig.add_trace(go.Bar(
         x=all_strikes, y=-p_oi.values, name="Put OI",
-        marker_color="rgba(255,140,0,0.25)",
+        marker_color="rgba(255,140,0,0.9)",
     ))
     # Put Volume (magenta, DOWN)
     fig.add_trace(go.Bar(
@@ -638,9 +638,16 @@ if snap is not None:
                     except: pass
                 try: pdf.index=pdf.index.tz_convert(NYSE_TZ)
                 except: pass
-                # Use ALL available data (no RTH filter)
+
+                # Filter extended hours only: 4AM-8PM ET (removes dead overnight)
+                ext_pdf = pdf[(pdf.index.time >= dtime(4,0)) & (pdf.index.time <= dtime(20,0))]
+                if ext_pdf.empty:
+                    ext_pdf = pdf
+
                 cd=[{"time":int(ts.timestamp()),"open":float(r.get("Open",0)),"high":float(r.get("High",0)),
-                     "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in pdf.iterrows()]
+                     "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in ext_pdf.iterrows()]
+
+                # GEX level price lines
                 pls=""
                 for key,(lbl,clr) in {"gamma_k_star":("K*","magenta"),"gamma_forward_price":("Fwd F","#ffffff"),
                     "gamma_zero_gamma":("Γ Flip","darkgoldenrod"),"gamma_call_wall":("Call Wall","#00ff88"),
@@ -649,31 +656,31 @@ if snap is not None:
                         val=float(tvl[key])
                         pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} {val:.0f}'}});\n"
                 if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot {float(sv):.0f}'}});\n"
-                # Compute round-number horizontal lines ($100 increments)
-                price_min = min(r.get("Low",0) for _,r in pdf.iterrows() if r.get("Low",0)>0)
-                price_max = max(r.get("High",0) for _,r in pdf.iterrows())
-                round_base = int(price_min // 100) * 100
-                round_lines_js = ""
-                for rl in range(round_base, int(price_max) + 200, 100):
-                    if price_min - 50 < rl < price_max + 50:
-                        round_lines_js += f"series.createPriceLine({{price:{rl},color:'#1a3a5c',lineWidth:1,lineStyle:0,axisLabelVisible:false,title:''}});\n"
 
-                # Find RTH open/close timestamps for markers
-                markers_js = "var markers = [];\n"
+                # $100 increment horizontal grid lines
+                prices_all = [r.get("Low",0) for _,r in ext_pdf.iterrows() if r.get("Low",0)>0] + [r.get("High",0) for _,r in ext_pdf.iterrows()]
+                price_min = min(prices_all) if prices_all else 0
+                price_max = max(prices_all) if prices_all else 0
+                round_lines_js = ""
+                for rl in range(int(price_min // 100) * 100, int(price_max) + 200, 100):
+                    if price_min - 50 < rl < price_max + 50:
+                        round_lines_js += f"series.createPriceLine({{price:{rl},color:'rgba(26,58,92,0.8)',lineWidth:1,lineStyle:0,axisLabelVisible:true,title:''}});\n"
+
+                # RTH open/close vertical lines using a separate line series
+                rth_lines_js = ""
                 seen_dates = set()
-                for ts in pdf.index:
+                for ts in ext_pdf.index:
                     d = ts.date()
                     if d in seen_dates:
                         continue
-                    # RTH open: 9:30 ET
-                    rth_open = ts.replace(hour=9, minute=30, second=0)
-                    rth_close = ts.replace(hour=16, minute=0, second=0)
-                    if rth_open in pdf.index or any(abs((t - rth_open).total_seconds()) < 300 for t in pdf.index if t.date() == d):
-                        markers_js += f"markers.push({{time:{int(rth_open.timestamp())},position:'belowBar',color:'#00d2ff',shape:'arrowUp',text:'RTH Open'}});\n"
-                    if rth_close in pdf.index or any(abs((t - rth_close).total_seconds()) < 300 for t in pdf.index if t.date() == d):
-                        markers_js += f"markers.push({{time:{int(rth_close.timestamp())},position:'belowBar',color:'#ff8c00',shape:'arrowDown',text:'RTH Close'}});\n"
                     seen_dates.add(d)
-                markers_js += "if(markers.length>0) series.setMarkers(markers);\n"
+                    rth_open_ts = int(datetime.combine(d, dtime(9,30), tzinfo=NYSE_TZ).timestamp())
+                    rth_close_ts = int(datetime.combine(d, dtime(16,0), tzinfo=NYSE_TZ).timestamp())
+                    # Use markers with vertical line style for RTH boundaries
+                    rth_lines_js += f"""
+                    chart.addLineSeries({{color:'rgba(0,210,255,0.4)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}}).setData([{{time:{rth_open_ts},value:{price_min}}},{{time:{rth_open_ts},value:{price_max}}}]);
+                    chart.addLineSeries({{color:'rgba(255,140,0,0.4)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}}).setData([{{time:{rth_close_ts},value:{price_min}}},{{time:{rth_close_ts},value:{price_max}}}]);
+                    """
 
                 cj=json_mod.dumps(cd)
                 html=f"""
@@ -688,8 +695,8 @@ if snap is not None:
                     layout:{{background:{{type:'solid',color:'#050b1e'}},textColor:'#c8d6e5'}},
                     grid:{{vertLines:{{visible:false}},horzLines:{{visible:false}}}},
                     crosshair:{{mode:LightweightCharts.CrosshairMode.Normal}},
-                    rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}},borderVisible:true,entireTextOnly:true}},
-                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false,rightOffset:20}},
+                    rightPriceScale:{{borderColor:'#1a3a5c',scaleMargins:{{top:0.05,bottom:0.05}}}},
+                    timeScale:{{borderColor:'#1a3a5c',timeVisible:true,secondsVisible:false,rightOffset:40}},
                     handleScroll:{{vertTouchDrag:true}},
                     handleScale:{{axisPressedMouseMove:true,mouseWheel:true,pinch:true}},
                 }});
@@ -701,8 +708,8 @@ if snap is not None:
                 series.setData({cj});
                 {round_lines_js}
                 {pls}
-                {markers_js}
-                var dl=series.data().length; chart.timeScale().setVisibleLogicalRange({{from: Math.max(0,dl-200), to: dl+20}});
+                {rth_lines_js}
+                chart.timeScale().fitContent();
                 new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
                 </script>"""
                 st.components.v1.html(html, height=620)
