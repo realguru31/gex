@@ -639,10 +639,9 @@ if snap is not None:
                 try: pdf.index=pdf.index.tz_convert(NYSE_TZ)
                 except: pass
 
-                # Filter extended hours only: 4AM-8PM ET (removes dead overnight)
+                # Filter extended hours: 4AM-8PM ET
                 ext_pdf = pdf[(pdf.index.time >= dtime(4,0)) & (pdf.index.time <= dtime(20,0))]
-                if ext_pdf.empty:
-                    ext_pdf = pdf
+                if ext_pdf.empty: ext_pdf = pdf
 
                 cd=[{"time":int(ts.timestamp()),"open":float(r.get("Open",0)),"high":float(r.get("High",0)),
                      "low":float(r.get("Low",0)),"close":float(r.get("Close",0))} for ts,r in ext_pdf.iterrows()]
@@ -657,30 +656,38 @@ if snap is not None:
                         pls+=f"series.createPriceLine({{price:{val},color:'{clr}',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'{lbl} {val:.0f}'}});\n"
                 if sv: pls+=f"series.createPriceLine({{price:{float(sv)},color:'#00d2ff',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'Spot {float(sv):.0f}'}});\n"
 
-                # $100 increment horizontal grid lines
+                # $250 increment horizontal grid lines (dim grey)
                 prices_all = [r.get("Low",0) for _,r in ext_pdf.iterrows() if r.get("Low",0)>0] + [r.get("High",0) for _,r in ext_pdf.iterrows()]
                 price_min = min(prices_all) if prices_all else 0
                 price_max = max(prices_all) if prices_all else 0
                 round_lines_js = ""
-                for rl in range(int(price_min // 100) * 100, int(price_max) + 200, 100):
-                    if price_min - 50 < rl < price_max + 50:
-                        round_lines_js += f"series.createPriceLine({{price:{rl},color:'rgba(26,58,92,0.8)',lineWidth:1,lineStyle:0,axisLabelVisible:true,title:''}});\n"
+                for rl in range(int(price_min // 250) * 250, int(price_max) + 300, 250):
+                    if price_min - 100 < rl < price_max + 100:
+                        round_lines_js += f"series.createPriceLine({{price:{rl},color:'rgba(80,100,130,0.5)',lineWidth:1,lineStyle:0,axisLabelVisible:false,title:''}});\n"
 
-                # RTH open/close vertical lines using a separate line series
-                rth_lines_js = ""
+                # RTH open/close markers on candles
+                markers_data = []
                 seen_dates = set()
                 for ts in ext_pdf.index:
                     d = ts.date()
-                    if d in seen_dates:
-                        continue
-                    seen_dates.add(d)
-                    rth_open_ts = int(datetime.combine(d, dtime(9,30), tzinfo=NYSE_TZ).timestamp())
-                    rth_close_ts = int(datetime.combine(d, dtime(16,0), tzinfo=NYSE_TZ).timestamp())
-                    # Use markers with vertical line style for RTH boundaries
-                    rth_lines_js += f"""
-                    chart.addLineSeries({{color:'rgba(0,210,255,0.4)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}}).setData([{{time:{rth_open_ts},value:{price_min}}},{{time:{rth_open_ts},value:{price_max}}}]);
-                    chart.addLineSeries({{color:'rgba(255,140,0,0.4)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}}).setData([{{time:{rth_close_ts},value:{price_min}}},{{time:{rth_close_ts},value:{price_max}}}]);
-                    """
+                    if d not in seen_dates:
+                        seen_dates.add(d)
+                        # Find closest candle to 9:30
+                        day_candles = ext_pdf[ext_pdf.index.date == d]
+                        for ct in day_candles.index:
+                            if ct.hour == 9 and 25 <= ct.minute <= 34:
+                                markers_data.append({"time":int(ct.timestamp()),"position":"aboveBar","color":"#00d2ff","shape":"circle","text":"Open"})
+                                break
+                        # Find closest candle to 16:00
+                        for ct in day_candles.index:
+                            if ct.hour == 15 and 55 <= ct.minute <= 59:
+                                markers_data.append({"time":int(ct.timestamp()),"position":"belowBar","color":"#ff8c00","shape":"circle","text":"Close"})
+                                break
+                            elif ct.hour == 16 and ct.minute <= 5:
+                                markers_data.append({"time":int(ct.timestamp()),"position":"belowBar","color":"#ff8c00","shape":"circle","text":"Close"})
+                                break
+
+                markers_js = f"series.setMarkers({json_mod.dumps(markers_data)});" if markers_data else ""
 
                 cj=json_mod.dumps(cd)
                 html=f"""
@@ -708,7 +715,7 @@ if snap is not None:
                 series.setData({cj});
                 {round_lines_js}
                 {pls}
-                {rth_lines_js}
+                {markers_js}
                 chart.timeScale().fitContent();
                 new ResizeObserver(e=>chart.applyOptions({{width:e[0].contentRect.width}})).observe(document.getElementById('tv-chart'));
                 </script>"""
