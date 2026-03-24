@@ -1,6 +1,6 @@
 """
 GEXdon Index Configuration — ZERO yfinance.
-Supports SPY, QQQ, SPX, NDX.
+Supports SPY, QQQ, SPX,
 """
 import pytz
 from datetime import time
@@ -11,33 +11,34 @@ MARKET_CLOSE = time(16, 30)
 SNAPSHOT_INTERVAL_MIN = 30
 AUTO_REFRESH_SEC = 300
 
-TICKERS = ["SPY", "QQQ", "SPX", "NDX"]
-TICKER_DISPLAY = {"SPY": "SPY", "QQQ": "QQQ", "SPX": "SPX", "NDX": "NDX"}
+TICKERS = ["SPY", "QQQ", "SPX"]
+TICKER_DISPLAY = {"SPY": "SPY", "QQQ": "QQQ", "SPX": "SPX"}
 
 # tvdatafeed mappings (spot + price chart)
 # SPX/NDX use OANDA CFD proxies for spot since Barchart spot has comma issues
 TV_SYMBOL = {
     "SPY": "SPY", "QQQ": "QQQ",
-    "SPX": "SPX500USD", "NDX": "NAS100USD",
+    "SPX": "SPX",
 }
 TV_EXCHANGE = {
-    "SPY": "AMEX", "QQQ": "NASDAQ",
-    "SPX": "OANDA", "NDX": "OANDA",
+    "SPY": "AMEX", 
+    "QQQ": "NASDAQ",
+    "SPX": "SP",
 }
-TV_EXCHANGE_FALLBACKS = ["AMEX", "NYSE", "NASDAQ", "CBOE", "OANDA"]
+TV_EXCHANGE_FALLBACKS = ["AMEX", "NYSE", "NASDAQ", "SP"]
 
 # Barchart mappings
 BC_BASE_SYM = {
     "SPY": "SPY", "QQQ": "QQQ",
-    "SPX": "$SPX", "NDX": "$IUXX",
+    "SPX": "$SPX",
 }
 BC_PAGE_TYPE = {
     "SPY": "etfs-funds", "QQQ": "etfs-funds",
-    "SPX": "stocks", "NDX": "stocks",
+    "SPX": "stocks",
 }
 
 # Tickers with daily 0DTE expirations (need today's date injected)
-DAILY_0DTE_TICKERS = {"SPY", "QQQ", "SPX", "NDX"}
+DAILY_0DTE_TICKERS = {"SPY", "QQQ", "SPX"}
 
 STRIKE_RANGES = [0.02, 0.03, 0.04, 0.05]
 STRIKE_RANGE_LABELS = {0.02: "2%", 0.03: "3%", 0.04: "4%", 0.05: "5%"}
